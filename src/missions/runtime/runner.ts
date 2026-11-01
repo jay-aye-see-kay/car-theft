@@ -1,4 +1,4 @@
-import type { Clock, GoToOptions, Mission, MissionApi, MissionPlayer } from './mission.ts';
+import type { BoardSection, Clock, GoToOptions, Mission, MissionApi, MissionPlayer } from './mission.ts';
 import type { Gazetteer, Place } from './places.ts';
 
 // Runs mission scripts against the game, a tick at a time in game time, so
@@ -66,6 +66,7 @@ export interface SharedMission {
   banner: (NonNullable<MissionView['banner']> & { left: number }) | null;
   subtitle: { text: string; left: number } | null;
   objective: string;
+  board: readonly BoardSection[];
   clock: { seconds: number; down: boolean } | null;
   targets: { x: number; z: number; label: string }[];
   /** Recent sounds, numbered. */
@@ -81,6 +82,8 @@ export interface MissionView {
   banner: { title: string; text: string; kind: 'start' | 'passed' | 'failed' } | null;
   subtitle: string | null;
   objective: string;
+  /** Lists in the corner (MissionApi.board). */
+  board: readonly BoardSection[];
   clock: { seconds: number; down: boolean } | null;
   /** The goals: tall beams. */
   targets: { x: number; z: number; label: string }[];
@@ -119,6 +122,7 @@ interface Run {
   clock: { from: number; down: boolean } | null;
   targets: Place[];
   objective: string;
+  board: readonly BoardSection[];
   shared: boolean;
 }
 
@@ -258,6 +262,7 @@ export class MissionRunner {
       banner: this.banner && { title: this.banner.title, text: this.banner.text, kind: this.banner.kind, left: this.banner.until - this.now },
       subtitle: run && this.subtitle && { text: this.subtitle.text, left: this.subtitle.until - this.now },
       objective: v.objective,
+      board: v.board,
       clock: v.clock,
       targets: v.targets,
       cues: this.cueLog,
@@ -303,6 +308,7 @@ export class MissionRunner {
         banner,
         subtitle: state.subtitle && state.subtitle.left - age > 0 ? state.subtitle.text : null,
         objective: state.objective,
+        board: state.board ?? [],
         clock: state.clock && { seconds: state.clock.seconds + (state.clock.down ? -age : age), down: state.clock.down },
         targets: state.targets,
         target: this.nearestOf(state.targets),
@@ -324,6 +330,7 @@ export class MissionRunner {
       banner: this.banner ?? shownBanner,
       subtitle: this.subtitle?.text ?? null,
       objective: run?.objective ?? '',
+      board: run?.board ?? [],
       clock: run?.clock ? { seconds: run.clock.down ? run.clock.from - this.now : this.now - run.clock.from, down: run.clock.down } : null,
       targets: run ? run.targets.map((p) => ({ x: p.x, z: p.z, label: p.name })) : [],
       target: run ? this.nearestOf(run.targets.map((p) => ({ x: p.x, z: p.z, label: p.name }))) : null,
@@ -408,7 +415,7 @@ export class MissionRunner {
   }
 
   private begin(mission: Mission): void {
-    const run: Run = { mission, started: this.now, pending: [], guards: [], crash: [], deadlines: [], clock: null, targets: [], objective: '', shared: shared(mission) };
+    const run: Run = { mission, started: this.now, pending: [], guards: [], crash: [], deadlines: [], clock: null, targets: [], objective: '', board: [], shared: shared(mission) };
     this.run = run;
     this.armed.set(mission.id, false);
     this.subtitle = null;
@@ -557,6 +564,10 @@ export class MissionRunner {
       objective: (text) => {
         live();
         run.objective = text;
+      },
+      board: (sections) => {
+        live();
+        run.board = sections.map((b) => ({ title: b.title, rows: b.rows.map((r) => ({ ...r })) }));
       },
       place: (id) => this.places.get(id),
       nearest: (kind, near, q) => this.places.nearest(kind, near ?? this.me, q),

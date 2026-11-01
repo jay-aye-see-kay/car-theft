@@ -163,7 +163,8 @@ async function main() {
   const savedName = cleanName(storage?.getItem(NAME_KEY) ?? '');
   const room = new Room({
     map: map.name,
-    name: savedName || `${NICKNAMES[Math.floor(Math.random() * NICKNAMES.length)]} ${10 + Math.floor(Math.random() * 90)}`,
+    // Cleaned like everyone else's, or "Pineapple Lump 58" is one name here and another to the host.
+    name: savedName || cleanName(`${NICKNAMES[Math.floor(Math.random() * NICKNAMES.length)]} ${10 + Math.floor(Math.random() * 90)}`),
     local: params.get('net') === 'local',
     turn: params.get('turn') !== 'off',
     localPose: () => localPose(),

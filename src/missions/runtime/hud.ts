@@ -34,6 +34,8 @@ export class MissionHud {
   private readonly subtitle: HTMLElement;
   private readonly clock: HTMLElement;
   private readonly objective: HTMLElement;
+  private readonly board: HTMLElement;
+  private boardKey = '';
   private readonly arrow: HTMLElement;
   private readonly arrowHead: HTMLElement;
   private readonly arrowLabel: HTMLElement;
@@ -50,6 +52,7 @@ export class MissionHud {
     this.clock = el(root, 'mission-clock hidden');
     this.objective = el(root, 'mission-objective hidden');
     this.subtitle = el(root, 'mission-subtitle hidden');
+    this.board = el(root, 'mission-board hidden');
     this.arrow = el(root, 'mission-arrow hidden');
     this.arrowHead = el(this.arrow, 'mission-arrow-head', CHEVRON);
     this.arrowLabel = el(this.arrow, 'mission-arrow-label');
@@ -67,6 +70,7 @@ export class MissionHud {
     this.text(this.subtitle, view.subtitle ?? '');
     this.show(this.objective, !!view.objective);
     this.text(this.objective, view.objective);
+    this.drawBoard(view.board);
     const c = view.clock;
     this.show(this.clock, !!c);
     if (c) {
@@ -117,6 +121,27 @@ export class MissionHud {
     }
     this.arrow.style.transform = `translate(${px.toFixed(0)}px, ${py.toFixed(0)}px)`;
     this.arrowHead.style.transform = `rotate(${angle.toFixed(0)}deg)`;
+  }
+
+  /** Rebuilt only when something on it changes (a few times a second at most). */
+  private drawBoard(sections: MissionView['board']): void {
+    const key = JSON.stringify(sections);
+    if (key === this.boardKey) return;
+    this.boardKey = key;
+    this.show(this.board, sections.length > 0);
+    this.board.replaceChildren();
+    for (const s of sections) {
+      if (s.title) this.text(el(this.board, 'mission-board-title'), s.title);
+      for (const r of s.rows) {
+        const row = el(this.board, `mission-board-row${r.done ? ' done' : ''}`);
+        this.text(el(row, 'mission-board-text'), r.text);
+        if (r.note) {
+          const note = el(row, 'mission-board-note');
+          this.text(note, r.note);
+          if (r.colour) note.style.color = r.colour;
+        }
+      }
+    }
   }
 
   private show(e: HTMLElement, on: boolean): void {
