@@ -34,7 +34,7 @@ export default {
     check(tower.name === 'the High Tower' && (await place('casino')).name === 'High City Casino', `${tower.name}, and ${(await place('casino')).name} next door`);
 
     // Places the missions use, and the hand-picked ones beside them, sit on open ground: not inside or on a building.
-    const used = ['britomart-plaza', 'town-hall', 'lower-queen-st', 'k-road-dairy', 'ferry-building', 'sky-tower', 'albert-st', 'mid-queen-st', 'sharona', 'casino', 'shouts-on-you', 'the-salty-sheep', 'the-tipsy-weka'];
+    const used = ['britomart-plaza', 'town-hall', 'lower-queen-st', 'k-road-dairy', 'ferry-building', 'sky-tower', 'albert-st', 'mid-queen-st', 'sharona', 'casino', 'shouts-on-you', 'the-salty-sheep', 'the-tipsy-weka', 'waharoa', 'aucklands-steepest-street', 'silo-park', 'temperate-house'];
     const bad = [];
     for (const id of used) {
       const p = await place(id);
@@ -133,6 +133,47 @@ export default {
     }
     m = await finish(60);
     check(m.last?.id === 'sky-tower-sprint' && m.last.result === 'passed' && /new best/i.test(m.last.message), `sprint through ${order.join(' → ')}: ${m.last?.result} ("${m.last?.message}")`);
+
+    // Grandad's Riddles: no beams or arrows at first, a hot/cold reading instead; then a
+    // beam as a fallback; all five solved, the loot found under the square (not on top of it).
+    await game('reset');
+    await getIn();
+    await game('teleportCar', 0, queen.x, queen.z, 0);
+    await step(30);
+    m = await missions();
+    const [list, heat] = m.board;
+    check(m.active === 'grandads-riddles' && !m.target && m.targets.length === 0 && /5 of 5 left/.test(m.objective), `the riddles start with no beam, just "${m.objective}"`);
+    check(list?.rows.length === 5 && list.rows.every((r) => !r.done) && heat?.rows.length === 1 && /^(hot!|warm|cool|cold|freezing)$/.test(heat.rows[0].note),
+      `the board lists ${list?.rows.length} riddles and ${heat?.rows.map((r) => `${r.text}: ${r.note}`).join(', ')}`);
+    await shot('27-riddles-hot-cold');
+    await step(60 * 245);
+    m = await missions();
+    check(m.targets.length === 1 && m.said.some((s) => /hint/.test(s)), `stuck for 4 minutes, one beam comes on (${m.targets.map((t) => t.label).join(', ')})`);
+    const riddles = ['ferry-building', 'waharoa', 'aucklands-steepest-street', 'silo-park', 'temperate-house'];
+    for (const id of riddles) {
+      const p = await place(id);
+      await game('teleportCar', 0, p.x, p.z, 0);
+      await step(30);
+    }
+    m = await missions();
+    const done = m.board[0]?.rows ?? [];
+    check(m.said.filter((s) => /^Solved:/.test(s)).length === 5 && done.slice(0, 5).every((r) => r.done) && /under the square/i.test(done[5]?.text) && m.objective === 'Find the loot',
+      `all five ticked off (${done.slice(0, 5).map((r) => r.text).join(', ')}), then "${done[5]?.text}"`);
+    // The loot counts anywhere within 60 m of (-509, 935) below 19 m: only the car park, if no open ground nearby is that low.
+    const low = [];
+    for (let dx = -60; dx <= 60; dx += 10) for (let dz = -60; dz <= 60; dz += 10) {
+      if (Math.hypot(dx, dz) > 60) continue;
+      const g = await game('probe', -509 + dx, 935 + dz);
+      if (g.ground < 19) low.push(`${dx},${dz}: ${g.ground.toFixed(1)}`);
+    }
+    check(low.length === 0, `no open ground near the loot is below 19 m${low.length ? ': ' + low.join('; ') : ''}`);
+    await game('teleportCar', 0, -509, 935, 0);
+    await step(60);
+    m = await missions();
+    check(m.active === 'grandads-riddles', 'on the square above the loot: not found yet');
+    await game('teleportCar', 0, -509, 918, -Math.PI / 2, 16.5);
+    m = await finish(120);
+    check(m.last?.id === 'grandads-riddles' && m.last.result === 'passed' && /lotto ticket/.test(m.last.message), `down in the car park: ${m.last?.result} ("${m.last?.message}")`);
 
     check((await state()).started, 'still running after the missions');
   },

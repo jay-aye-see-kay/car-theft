@@ -393,6 +393,68 @@ canvas {
   font-weight: 800;
 }
 
+/* Mission lists (MissionApi.board): bottom left, where nothing else is on a laptop (clear of the keys line). */
+.mission-board {
+  position: absolute;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 26px);
+  width: min(34vw, 360px);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.mission-board-title {
+  color: #ffd98a;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 6px 0 3px;
+}
+
+.mission-board-title:first-child {
+  margin-top: 0;
+}
+
+.mission-board-row {
+  display: flex;
+  gap: 8px;
+  margin: 3px 0;
+}
+
+.mission-board-text {
+  flex: 1;
+}
+
+.mission-board-note {
+  white-space: nowrap;
+}
+
+.mission-board-row.done {
+  opacity: 0.55;
+}
+
+.mission-board-row.done .mission-board-text::before {
+  content: '✓ ';
+  color: #8f8;
+}
+
+/* Phones: the stick has the bottom left, so the board goes top left, small. */
+#app:has(.touch) .mission-board {
+  bottom: auto;
+  top: calc(max(8px, env(safe-area-inset-top)) + 22px);
+  width: min(36vw, 300px);
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+#app:has(.touch) .mission-board-title {
+  font-size: 10px;
+}
+
 /* The arrow's box is centred on the point it's translated to. */
 .mission-arrow {
   position: absolute;

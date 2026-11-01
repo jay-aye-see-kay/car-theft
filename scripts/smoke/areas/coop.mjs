@@ -88,6 +88,31 @@ export default {
     gm = await gMissions();
     check(m.last?.id === 'last-orders' && m.last.result === 'passed' && gm.last?.id === 'last-orders' && gm.last.result === 'passed', `both back: passed for both ("${m.last?.message}")`, loose);
 
+    // Grandad's Riddles together: the guest sees everyone's hot/cold reading and can solve one.
+    const queen = await place('lower-queen-st');
+    await game('placePlayer', queen.x + 10, queen.z, 0);
+    await g('placePlayer', queen.x + 14, queen.z, 0);
+    await settle(60);
+    await game('placePlayer', queen.x, queen.z, 0);
+    await g('placePlayer', queen.x + 4, queen.z, 0);
+    await settle();
+    await step(30);
+    await gStep(30);
+    gm = await gMissions();
+    const hostName = groom.members.find((x) => x.host).name;
+    const heat = gm.board?.[1]?.rows ?? [];
+    check(gm.active === 'grandads-riddles' && gm.board?.[0]?.rows.length === 5 && heat.some((r) => r.text === hostName) && heat.some((r) => r.text === guestName) && gm.targets.length === 0,
+      `riddles for both, no beams; the guest's board: ${heat.map((r) => `${r.text} ${r.note}`).join(', ')}`, loose);
+    const steep = await place('aucklands-steepest-street');
+    await g('placePlayer', steep.x, steep.z, 0);
+    await settle();
+    await step(30);
+    m = await missions();
+    check(m.said.some((s) => s.startsWith(`${guestName} solved one`)), `the guest solves the steepest street: "${m.said.find((s) => /solved one/.test(s))}"`, loose);
+    // Starting another mission abandons the riddles; the host-leaves check below wants a milk run going anyway.
+    await game('startMission', 'milk-run');
+    await settle();
+
     // The host leaves mid-mission: it ends for the guest.
     await g('placePlayer', dairy.x + 15, dairy.z, 0);
     await game('placePlayer', dairy.x + 10, dairy.z, 0);

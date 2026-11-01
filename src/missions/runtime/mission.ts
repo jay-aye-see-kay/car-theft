@@ -42,6 +42,22 @@ export interface GoToOptions {
   everyone?: readonly MissionPlayer[];
 }
 
+/** One line on the board: `note` sits to its right (who did it, how warm), in `colour` if given. */
+export interface BoardRow {
+  readonly text: string;
+  readonly note?: string;
+  /** Ticked off: drawn dimmed, with a tick. */
+  readonly done?: boolean;
+  /** A CSS colour for the note. */
+  readonly colour?: string;
+}
+
+/** A titled list on the board. */
+export interface BoardSection {
+  readonly title?: string;
+  readonly rows: readonly BoardRow[];
+}
+
 /** A countdown or stopwatch shown at the top of the screen. */
 export interface Clock {
   /** Seconds left (countdown) or gone (stopwatch). */
@@ -61,6 +77,11 @@ export interface MissionApi {
   say(text: string, seconds?: number): void;
   /** The objective line under the timer; '' clears it. */
   objective(text: string): void;
+  /**
+   * Lists in a corner of the screen (bottom left; top left on phones, clear of the stick):
+   * a checklist, everyone's score. Replaces the last board; [] clears it.
+   */
+  board(sections: readonly BoardSection[]): void;
   /** A place from the gazetteer by id ('k-road-dairy'). */
   place(id: PlaceId): Place;
   /** The nearest place of a kind to `near` (default: the player), or null. */
