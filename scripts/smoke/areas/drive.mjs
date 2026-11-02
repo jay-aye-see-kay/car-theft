@@ -7,6 +7,9 @@ export default {
   page: 'auckland',
   async run(t) {
     const { check, game, state, step, run, getIn, shot, dist } = t;
+    // The road to ourselves: this is about the ground, and hands-off driving would hit traffic (traffic.mjs).
+    await game('knob', 'traffic.on', false);
+    await game('knob', 'parked.on', false);
 
     // Drive the purple Corolla forward from a spot until `until`, tracking
     // the chassis' clearance above the terrain under it.

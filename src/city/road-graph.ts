@@ -225,6 +225,11 @@ export class RoadGraph {
     return best;
   }
 
+  /** The closest point on one edge's centreline to (x, z) (traffic keeps track of how far along it is). */
+  snapTo(edge: RoadEdge, x: number, z: number): RoadSnap {
+    return project(edge, x, z);
+  }
+
   /** The centreline at `s` metres from a, facing a -> b. */
   pointAt(edge: RoadEdge, s: number): Pose {
     const { pts, s: at } = edge;

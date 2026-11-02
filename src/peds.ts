@@ -338,6 +338,22 @@ export class Peds {
     return p;
   }
 
+  /**
+   * A driver turfed out of their car (you took it): standing on the road at
+   * (x, z), facing `heading`, and they have something to say about it.
+   */
+  turfOut(x: number, z: number, heading: number, player: { x: number; z: number }): Ped | null {
+    if (!PEDS.on) return null;
+    const snap = this.w.roads.nearest(x, z, { within: 80, open: false });
+    if (!snap) return null;
+    const p = this.make(snap.edge, 1, 0, snap.left ? 1 : -1, x, z);
+    p.heading = heading;
+    this.relink(p);
+    this.list.push(p);
+    this.react(p, player);
+    return p;
+  }
+
   private launch(p: Ped, c: CarLike, v: CarVelocity, index: number): void {
     const t = c.body.translation();
     // Mostly along the car, a little away from its middle (a glancing blow throws you sideways).

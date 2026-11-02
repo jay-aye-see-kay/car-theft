@@ -31,7 +31,9 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
 ## Layout
 
 - `src/main.ts`: game loop (fixed 60 Hz physics, render interpolation), enter/exit, HUD, `?debug` hooks
-- `src/car.ts` (`TUNING`), `src/corolla.ts` (model, `bake()`), `src/player.ts` (also the body plan
+- `src/car.ts` (`TUNING`; parked cars sleep until knocked), `src/corolla.ts` (model, baked to shared geometry),
+  `src/car-fleet.ts` (every car drawn in five instanced calls: bodies with per-car paint, lamps, wheels, a
+  ~50-triangle stand-in past 80 m, blob shadows; culled per car on the CPU), `src/player.ts` (also the body plan
   pedestrians share), `src/camera.ts`,
   `src/input.ts` (touch/keyboard/gamepad), `src/cheats.ts` (stick-flick codes: ↑↑↓↓←→←→ flies),
   `src/audio.ts` (synthesised), `src/skids.ts`
@@ -54,6 +56,12 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
     draws everyone in one instanced call (limbs swung in the vertex shader) plus one for shadows;
     `src/bubbles.ts` speech bubbles; `audio.bark()`. `CarSpeeds` measures cars per tick (kinematic ones too).
     Each client runs its own (not shared in rooms).
+  - `src/traffic.ts` (`TRAFFIC`, `PARKED`, #29): the town's cars, from fixed pools appended to the map's parked
+    cars (so indices match in rooms; someone driving one takes it over everywhere). Traffic drives the road
+    graph on the left (outside lane on multi-lane roads), mostly straight on at junctions, slows for corners,
+    keeps a gap, stops for you on foot, pulls out round stopped cars; no lights. More parked cars on kerbside
+    spots found from the road graph. Both appear out of view and go once far off and out of sight. Get into a
+    driving one and its driver is turfed out (`Peds.turfOut`). Each client runs its own.
 - `src/maps/`: `auckland.ts` (default) and `test-town.ts` (`?map=test`)
 - `src/missions/`: one file per mission (`defineMission`, picked up by `import.meta.glob`).
   `runtime/`: `mission.ts` (the script API), `runner.ts` (runs scripts in game time; a mission
@@ -95,9 +103,10 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   LiDAR treetops on green ground and tree-shaped ones over footpaths), `barriers.ts` (park edges: walls, fences,
   hedges, retaining walls, and a default low hedge where a park meets a footpath).
 - `scripts/smoke/` (Playwright: `run.mjs`, one file per area), `scripts/sim-car.ts`. Experiments:
-  `dizzy.mjs`, `peds.mjs`, `tweaks.mjs` (the panel on the phone page); hooks `__game.dizzy()`, `peds()`,
+  `dizzy.mjs`, `peds.mjs`, `traffic.mjs`, `tweaks.mjs` (the panel on the phone page); hooks `__game.dizzy()`, `peds()`, `town()`,
   `spawnPed(x, z)`, `knobs()`, `knob('dizzy.on', false)`, `dropPlayer(m)`, `hitPlayer(car, speed)`.
-  `__game.reset()` also resets every knob and reseeds the pedestrians.
+  `__game.reset()` also resets every knob, reseeds the pedestrians and takes the town's cars away. Areas that
+  drive scripted routes turn traffic off (`knob('traffic.on', false)`, as `drive.mjs` does).
 
 ## Conventions
 
@@ -124,8 +133,9 @@ Measured at `__game.view('spawn' | 'queen-st' | 'aerial')` with `?debug`
 | Street (`spawn`, `queen-st`) | < 150k | < 60 |
 | Aerial | < 300k | < 100 |
 
-Street view is ~145k / ~45 today (a visible mission marker is one call; pedestrians are
-two calls and ~170 triangles each, dizzy stars one call when anyone's dizzy). Each chunk is one draw call: put new static
+Street view is ~140–148k / ~40 today (a visible mission marker is one call; pedestrians are
+two calls and ~170 triangles each, dizzy stars one call when anyone's dizzy; cars are five calls however many,
+~820 triangles each within 40 m, ~350 to 80 m, ~50 beyond; street view varies a few k with traffic in it). Each chunk is one draw call: put new static
 geometry into `ChunkMesh` (vertex colours, shared materials/atlas), not new
 meshes. Small building detail goes in `MeshBuilder.detail()`: near-only
 (within 250 m: verandahs, parapets) or fine (120 m: cornices, plant, eaves).
