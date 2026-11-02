@@ -30,6 +30,10 @@ import { RoomPanel } from './net/panel.ts';
 import { roundQuat, roundVec, round2, type Pose } from './net/protocol.ts';
 import { Remotes } from './net/remotes.ts';
 import { cleanName, Room, type PoseBody } from './net/room.ts';
+import { bearing, Chart, type Blip } from './map/chart.ts';
+import { FullMap } from './map/full-map.ts';
+import { Minimap } from './map/minimap.ts';
+import { Navigator } from './map/navigator.ts';
 import './style.css';
 
 const FIXED_DT = 1 / 60;
@@ -73,6 +77,10 @@ const HIT_COOLDOWN = 1;
 const BUBBLE_LIFT = 2.25;
 /** "Oi!" fades out by this far from the camera, m. */
 const BARK_RANGE = 60;
+/** The minimap shows this far to its rim on foot, m, and this much more per m/s, up to the most. */
+const MAP_RADIUS = 160;
+const MAP_RADIUS_PER_MS = 6;
+const MAP_RADIUS_MAX = 380;
 
 async function main() {
   const app = document.getElementById('app')!;
@@ -204,6 +212,11 @@ async function main() {
   const markers = new MissionMarkers();
   scene.add(markers.group);
   const missionHud = new MissionHud(hud);
+  // The map (#14): the minimap, the full-screen map, your waypoint and the route
+  // there. Only where there's a picture of the map (Auckland: tools/citygen/map.ts).
+  const nav = new Navigator(map.roads ?? null);
+  const chart = map.chart ? await Chart.load(map.chart.url, map.chart.bounds, map.roads ?? null) : null;
+  const minimap = chart ? new Minimap(hud, chart) : null;
 
   // Rooms (#26): other players, the 👥 panel, and the link to them.
   const remotes = new Remotes(world, scene, cars.map((c) => c.car), hud);
@@ -236,15 +249,19 @@ async function main() {
   const roomPanel = new RoomPanel(hud, room);
   roomPanel.onRename = (name) => storage?.setItem(NAME_KEY, name);
   const bubbles = new Bubbles(hud);
-  // The ? panel: the game pauses while it's open.
+  // The ? panel and the full map: the game pauses while either is open.
   let paused = false;
   const tweaksPanel = new TweaksPanel(hud);
   tweaksPanel.toast = (text) => roomPanel.toast(text);
-  tweaksPanel.onToggle = (open) => {
-    paused = open;
-    audio.setPaused(open);
+  const fullMap = chart ? new FullMap(hud, chart, nav, () => mapScene()) : null;
+  const pause = () => {
+    paused = tweaksPanel.isOpen || !!fullMap?.open;
+    audio.setPaused(paused);
     input.clearPresses();
   };
+  tweaksPanel.onToggle = pause;
+  if (fullMap) fullMap.onToggle = pause;
+  if (minimap) minimap.onOpen = () => fullMap?.toggle(true);
   const roomNote = document.createElement('p');
   roomNote.className = 'sub';
   status.after(roomNote);
@@ -534,6 +551,7 @@ async function main() {
     audio.unlock();
     splash.classList.add('hidden');
     hud.classList.remove('hidden');
+    if (fullMap) fullMap.enabled = true;
     if (coarse) {
       try {
         await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' });
@@ -895,11 +913,55 @@ async function main() {
     room.tick(clock);
     if (missions) {
       const view = missions.view();
-      const focus = driving ? driving.object.position : player.position;
       markers.update(view, map.heightAt, camera.position, clock);
-      camera.updateMatrixWorld();
-      missionHud.update(view, camera, focus, map.heightAt);
+      missionHud.update(view);
     }
+    // Stepped tests (manual) keep the route up to date but only draw the minimap when they draw a frame.
+    if (minimap && !manual) drawMinimap(frameDt);
+    else if (minimap) navigate();
+  };
+
+  /** Minimap radius, m: wider the faster you go. */
+  let mapRadius = MAP_RADIUS;
+  const _dir = new THREE.Vector3();
+  /** The bearing something faces (cars and people face local +x). */
+  const facingOf = (o: THREE.Object3D) => {
+    const h = _euler.setFromQuaternion(o.quaternion, 'YXZ').y;
+    return bearing(Math.cos(h), -Math.sin(h));
+  };
+  /** Missions to start, goals and others in the room, for both maps (names on the full one). */
+  const mapBlips = (full: boolean): Blip[] => {
+    const out: Blip[] = [];
+    const view = missions?.view();
+    if (view) {
+      for (const s of view.starts) out.push({ kind: 'mission', x: s.x, z: s.z, label: full ? s.title : undefined, edge: s === view.nearest });
+      for (const t of view.targets) out.push({ kind: 'goal', x: t.x, z: t.z, label: full ? t.label : undefined, edge: true });
+    }
+    if (room.role !== 'solo') for (const p of remotes.players()) out.push({ kind: 'remote', x: p.x, z: p.z, label: full ? p.name : undefined });
+    return out;
+  };
+  /** Routes from where you are to your waypoint, else the mission's goal. */
+  const navigate = () => {
+    const you = (driving ? driving.object : player.object).position;
+    nav.update(you, missions?.view().target ?? null, clock);
+    return you;
+  };
+  const mapScene = () => {
+    const you = navigate();
+    return { you: { x: you.x, z: you.z, facing: facingOf(driving ? driving.object : player.object) }, route: nav.route, blips: mapBlips(true) };
+  };
+  const drawMinimap = (dt: number) => {
+    const you = navigate();
+    const speed = driving ? Math.abs(driving.forwardSpeed()) : 0;
+    mapRadius += (Math.min(MAP_RADIUS_MAX, MAP_RADIUS + speed * MAP_RADIUS_PER_MS) - mapRadius) * Math.min(1, dt * 1.5);
+    camera.getWorldDirection(_dir);
+    const blips = mapBlips(false);
+    if (nav.waypoint) blips.push({ kind: 'waypoint', x: nav.waypoint.x, z: nav.waypoint.z, edge: true });
+    blips.push({ kind: 'player', x: you.x, z: you.z, facing: facingOf(driving ? driving.object : player.object) });
+    const dest = nav.destination(missions?.view().target ?? null);
+    const d = nav.left;
+    const label = dest ? `${dest.kind === 'waypoint' ? '' : `${dest.label} · `}${d < 1000 ? `${Math.round(d / 10) * 10} m` : `${(d / 1000).toFixed(1)} km`}` : '';
+    minimap!.draw(you.x, you.z, bearing(_dir.x, _dir.z), mapRadius, nav.route, blips, label);
   };
 
   /** Every car in view into the fleet's instanced meshes: the whole car near, just the body further out, shadows within CAR_DETAIL. */
@@ -943,6 +1005,7 @@ async function main() {
       }
       if (!drawRequested) return;
       drawRequested = false;
+      if (minimap) drawMinimap(0);
     }
     const tRender = performance.now();
     renderer.render(scene, camera);
@@ -1013,7 +1076,7 @@ async function main() {
         skid: driving?.skid ?? 0,
         skidQuads: skids.laid,
         nearCar: !!nearestCar(),
-        /** The ? panel is open (the game is paused). */
+        /** The ? panel or the full map is open (the game is paused). */
         paused,
         dizzy: dizzy.active,
         peds: peds?.list.length ?? 0,
@@ -1295,6 +1358,9 @@ async function main() {
         upsideDownTime = 0;
         missions?.reset();
         tweaksPanel.toggle(false);
+        fullMap?.toggle(false);
+        nav.reset();
+        mapRadius = MAP_RADIUS;
         resetValues();
         dizzy.reset();
         peds?.reset(1);
@@ -1307,6 +1373,25 @@ async function main() {
         chase.snap(map.spawn.heading);
         await step(2); // and stays paused: what follows is stepped from here
       },
+      /** The map: whether the minimap's up and the full map open, the waypoint, where you're headed and the route there. */
+      mapState: () => {
+        navigate();
+        const dest = nav.destination(missions?.view().target ?? null);
+        return {
+          minimap: !!minimap && minimap.el.offsetWidth > 0,
+          open: fullMap?.open ?? false,
+          waypoint: nav.waypoint && { x: Math.round(nav.waypoint.x), z: Math.round(nav.waypoint.z) },
+          destination: dest && { kind: dest.kind, x: Math.round(dest.x), z: Math.round(dest.z) },
+          routePoints: nav.route?.length ?? 0,
+          routeLeft: Math.round(nav.left),
+        };
+      },
+      /** Set the waypoint (on the nearest road), or clear it with no arguments. */
+      waypoint: (x?: number, z?: number) => (x === undefined || z === undefined ? (nav.waypoint = null) : nav.setWaypoint(x, z)),
+      /** Open or close the full map. */
+      openMap: (open = true) => fullMap?.toggle(open),
+      /** Where a ground point is on the open full map, in page px (to click it). */
+      mapPoint: (x: number, z: number) => fullMap?.screenOf(x, z) ?? null,
       /**
        * Move a car (default: the purple one) to (x, z) on the ground, facing
        * `heading`; give `y` to put it on a floor under the ground (a car park).

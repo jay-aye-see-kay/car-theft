@@ -18,14 +18,14 @@ body {
 }
 
 #app,
-canvas {
+#app > canvas {
   position: fixed;
   inset: 0;
   display: block;
 }
 
 /* A canvas keeps its buffer size under inset: 0; this makes it fill #app (main.ts sizes only the buffer). */
-canvas {
+#app > canvas {
   width: 100%;
   height: 100%;
 }
@@ -164,7 +164,8 @@ canvas {
 }
 
 #app:has(#splash:not(.hidden)) .touch,
-#app:has(#tweaks-panel:not(.hidden)) .touch {
+#app:has(#tweaks-panel:not(.hidden)) .touch,
+#app:has(#map-full:not(.hidden)) .touch {
   display: none;
 }
 
@@ -443,10 +444,10 @@ canvas {
   color: #8f8;
 }
 
-/* Phones: the stick has the bottom left, so the board goes top left, small. */
+/* Phones: the stick has the bottom left, so the board goes top left under the minimap, small. */
 #app:has(.touch) .mission-board {
   bottom: auto;
-  top: calc(max(8px, env(safe-area-inset-top)) + 22px);
+  top: calc(max(10px, env(safe-area-inset-top)) + var(--minimap) + 26px);
   width: min(36vw, 300px);
   padding: 6px 8px;
   font-size: 11px;
@@ -454,39 +455,6 @@ canvas {
 
 #app:has(.touch) .mission-board-title {
   font-size: 10px;
-}
-
-/* The arrow's box is centred on the point it's translated to. */
-.mission-arrow {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-  color: #ff5fc8;
-}
-
-.mission-arrow[data-kind='start'] {
-  color: #ffc23d;
-}
-
-.mission-arrow-head {
-  position: absolute;
-  width: 30px;
-  height: 30px;
-  left: -15px;
-  top: -15px;
-  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.6));
-}
-
-.mission-arrow-label {
-  position: absolute;
-  top: 18px;
-  left: 0;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 800;
 }
 
 /* Short (landscape phone) screens: smaller mission text, clear of the touch controls. */
@@ -892,4 +860,144 @@ canvas {
   margin-left: -6px;
   border: 6px solid transparent;
   border-top-color: #111;
+}
+
+/* The map (src/map/): the minimap top left, the full map over everything. */
+:root {
+  --minimap: 150px;
+}
+
+@media (max-height: 500px) {
+  :root {
+    --minimap: 112px;
+  }
+}
+
+#minimap {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(14px, env(safe-area-inset-left));
+  width: var(--minimap);
+  height: var(--minimap);
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#minimap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 3px solid rgba(0, 0, 0, 0.75);
+  box-sizing: border-box;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Centred on the rim point it's translated to. */
+.minimap-north {
+  position: absolute;
+  left: calc(50% - 8px);
+  top: calc(50% - 8px);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #111;
+  color: #fff;
+  font: 900 10px/16px system-ui, sans-serif;
+  text-align: center;
+}
+
+.minimap-label {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(var(--minimap) + 60px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+  color: #e3d1ff;
+  text-shadow: 0 1px 0 #000, 0 0 4px #000;
+}
+
+/* The perf readout (?debug) goes beside the minimap. */
+#fps {
+  left: calc(max(14px, env(safe-area-inset-left)) + var(--minimap) + 10px);
+}
+
+#map-full {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  background: #2c3036;
+  z-index: 5;
+}
+
+#map-full canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.map-bar {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  display: flex;
+  gap: 8px;
+}
+
+.map-bar button {
+  min-width: 42px;
+  height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font: 800 18px system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.map-bar .map-clear {
+  font-size: 14px;
+  background: rgba(130, 80, 200, 0.85);
+}
+
+.map-legend {
+  position: absolute;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.map-legend span::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 50%;
+  border: 1.5px solid #000;
+  background: var(--c);
+  vertical-align: -1px;
+}
+
+.map-legend em {
+  font-style: normal;
+  opacity: 0.75;
 }

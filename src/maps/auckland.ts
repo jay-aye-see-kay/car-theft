@@ -133,6 +133,7 @@ export async function loadAuckland(scene: THREE.Scene, world: RAPIER.World, maxA
     landmarks: () => landmarks.list(),
     places,
     roads,
+    chart: { url: new URL('map.png', base), bounds: manifest.bounds },
     debugInfo: () => ({ ...terrain.stats(), atlasLayers: atlas.image.depth, skylineTris: skyline?.total ?? 0, skylineDrawn: skyline?.drawn ?? 0 }),
   };
 }

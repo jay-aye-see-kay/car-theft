@@ -19,6 +19,7 @@ import { chunkFile, CITY_FORMAT, encodeBuildings, encodeGround, encodeSkyline, e
 import { buildBuildings, MeshBuilder } from './buildings.ts';
 import { Frontages } from './frontage.ts';
 import { buildParking, writeParking } from './parking.ts';
+import { writeMap } from './map.ts';
 import { buildPlaces, writePlaces } from './places.ts';
 import { buildRoadGraph, describeRoadGraph, writeRoadGraph } from './roadgraph.ts';
 import { loadCityData } from './fetch.ts';
@@ -260,4 +261,6 @@ console.log(
   `Wrote ${roads.chunks.size} road chunks: ${(roadBytes / 1024).toFixed(0)} KB deflated, ` +
     `largest ${(maxRoadBytes / 1024).toFixed(0)} KB, ${roadVerts} vertices, ${roadTris} triangles; ground ${(groundBytes / 1024).toFixed(0)} KB`,
 );
+// The map picture, from the chunks just written.
+writeMap();
 console.log(`Total ${(size(OUT) / 1024).toFixed(0)} KB in ${OUT}`);

@@ -1,7 +1,7 @@
 // The road graph: the drivable network, generated offline by
 // tools/citygen/roadgraph.ts into public/city/<area>/roadgraph.json.
 //
-// Routing for mission arrows and the minimap, lanes for traffic and police:
+// Routing for the map's route, lanes for traffic and police:
 //   nearest(x, z)        the closest road: which edge, how far along, which side
 //   route(from, to)      shortest legal drive between two points (one-ways respected)
 //   lane(edge, dir, k, s) a pose in lane k (0 = kerbside), driving on the left

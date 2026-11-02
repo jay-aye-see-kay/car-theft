@@ -24,13 +24,19 @@ performance overlay, `?map=test` for the old test town).
 | Flip car | R | ⟲ | Back |
 | Look around | drag the view | drag the view | right stick |
 | Mute | M | 🔊 | |
+| Map | Tab | tap the minimap | |
 
 Getting out at speed brakes to a stop first, like GTA III. You step out of
 the driver's door, which is on the right (they're NZ cars).
 
-**Missions:** walk (or drive) into a gold marker to start one. The gold
-arrow points to the nearest; once one is running, the pink arrow and beam
-show where to go. So far: *Handle With Care* (outside Britomart, where you
+**Map:** the minimap in the top left turns with you, and shows mission
+blips (gold), your goal (pink) and the route there. Tap it (or press Tab)
+for the full map: drag and pinch or scroll to look around, tap to set a
+waypoint (the route on both maps takes you there), tap a mission to head for
+it, tap the waypoint again to clear it.
+
+**Missions:** walk (or drive) into a gold marker to start one. Once one is
+running, the pink beam, the pink blip and the route show where to go. So far: *Handle With Care* (outside Britomart, where you
 start), *Milk Run* (K Road) and *High Tower Sprint* (bring a car).
 
 ## Develop

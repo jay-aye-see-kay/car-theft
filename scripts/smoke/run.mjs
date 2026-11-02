@@ -36,9 +36,10 @@ import dizzy from './areas/dizzy.mjs';
 import peds from './areas/peds.mjs';
 import tweaks from './areas/tweaks.mjs';
 import traffic from './areas/traffic.mjs';
+import mapArea from './areas/map.mjs';
 
 /** In running order. Areas on the same page share it, each starting from __game.reset(). */
-const AREAS = [core, walls, terrain, trees, parks, parked, drive, bridges, buildings, aotea, fly, harbour, budget, missions, roads, dizzy, peds, traffic, rooms, coop, realtime, testTown, phone, tweaks];
+const AREAS = [core, walls, terrain, trees, parks, parked, drive, bridges, buildings, aotea, fly, harbour, budget, missions, mapArea, roads, dizzy, peds, traffic, rooms, coop, realtime, testTown, phone, tweaks];
 
 const PORT = 4179;
 const URL = `http://localhost:${PORT}/?debug`;

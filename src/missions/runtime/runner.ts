@@ -87,11 +87,11 @@ export interface MissionView {
   clock: { seconds: number; down: boolean } | null;
   /** The goals: tall beams. */
   targets: { x: number; z: number; label: string }[];
-  /** The nearest goal, for the screen-edge arrow. */
+  /** The nearest goal: the route on the map heads there. */
   target: { x: number; z: number; label: string } | null;
   /** Start markers to draw (idle only). */
   starts: { id: string; title: string; x: number; z: number }[];
-  /** Nearest start (idle only), for the gold arrow. */
+  /** Nearest start (idle only): its blip clings to the minimap's rim. */
   nearest: { id: string; title: string; x: number; z: number } | null;
   /** Next to a start marker: what to do. */
   hint: string;

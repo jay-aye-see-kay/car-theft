@@ -99,7 +99,7 @@ export default {
     m = await missions();
     check(m.active === 'milk-run' && m.clock?.down && m.clock.seconds > 85, `stepping on the K Road marker starts the milk run (${m.clock?.seconds.toFixed(0)} s left)`);
     await step(240);
-    await shot('24-milk-run-arrow');
+    await shot('24-milk-run-route');
     await game('placePlayer', ferry.x, ferry.z, 0);
     m = await finish(120);
     check(m.last?.id === 'milk-run' && m.last.result === 'passed', `milk delivered to the ferry: ${m.last?.result} ("${m.last?.message}")`);

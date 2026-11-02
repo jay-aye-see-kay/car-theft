@@ -22,6 +22,7 @@ npm run dev     # dev server with --host, for phones on the LAN
 npm run citygen:build   # regenerate public/city/cbd/ (fetches OSM + LiDAR into .cache/)
 npm run citygen:places  # just the gazetteer (places.json), e.g. after editing names or overrides
 npm run citygen:roadgraph  # just the road graph (roadgraph.json)
+npm run citygen:map     # just the map picture (map.png), from the committed chunks
 ```
 
 CI (`.github/workflows/deploy.yml`) only builds and deploys from the default
@@ -37,6 +38,13 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   pedestrians share), `src/camera.ts`,
   `src/input.ts` (touch/keyboard/gamepad), `src/cheats.ts` (stick-flick codes: ↑↑↓↓←→←→ flies),
   `src/audio.ts` (synthesised), `src/skids.ts`
+- `src/map/` (#14): `chart.ts` (map.png with the road graph stroked over it once, into one 2D canvas; draws
+  views of it, the route and blips), `minimap.ts` (round, top left, turns with the camera, zooms out with speed;
+  goal, waypoint and nearest mission cling to its rim; tap for the full map), `full-map.ts` (north up, drag/pinch/
+  wheel, tap sets a waypoint or picks a mission, Tab / Esc; pauses the game), `navigator.ts` (destination: your
+  waypoint, else the mission's goal; road route, re-routed off it, trimmed behind you), `style.ts` (colours,
+  shared with citygen). 2D canvas, so no WebGL draw calls. `?debug`: `__game.mapState()`, `waypoint(x, z)`
+  (none to clear), `openMap(open)`, `mapPoint(x, z)` (page px on the open map, to click).
 - `src/sky.ts`, `src/sun.ts`, `src/splash.ts` (title screen with data credits)
 - **Experiments** (#53 on): v1 is a lab for finding out what's fun. Tone: cheeky, not violent (`docs/BRIEF.md`).
   - `src/tweaks.ts` + `src/tweaks-panel.ts`: the **? panel** (button by mute, `?` key), the playtest
@@ -68,7 +76,7 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   with `players.max > 1` is shared: the room gathers at its marker, the host runs it with everyone as `players`,
   and guests mirror its `share()` state; solo ones run wherever they're started), `places.ts` (the gazetteer: `places.json` ids,
   typechecked, plus `nearest`/`random` by kind), `markers.ts` (start rings, goal beam),
-  `hud.ts` (banner, timer, arrow). To add a mission: pick places from
+  `hud.ts` (banner, timer, objective, board; where to go is on the map). To add a mission: pick places from
   `public/city/cbd/places.json` or `__game.places('bar', { near: [x, z], within: 200 })`
   (pin a nicer id or name with `place` in the overrides), write the file, and play it
   through by teleporting in `scripts/smoke/areas/missions.mjs` (shared ones in `coop.mjs`, two tabs).
@@ -97,12 +105,13 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   rooftop plant), `eras.ts` (facade family, colours and cornices per architectural era).
   Road graph: `roadgraph.ts` (junction-to-junction edges with lanes each way, heights from the
   smoothed ground or the deck → `roadgraph.json`; `prepare.ts` is the ground smoothing it shares with `build.ts`).
+  Map: `map.ts` (map.png, 1 m per pixel: ground classes, water, roofs, from the chunk files, no OSM needed).
   Places: `places.ts` (OSM POIs → `places.json`, marker on the kerb outside), `names.ts` (parody
   names: brand table, hand-written lists per kind, templates; no real business name may leak).
   Parks: `ground.ts` (land use, park paths, canopy cover: shade near, canopy tint far), `trees.ts` (OSM trees plus
   LiDAR treetops on green ground and tree-shaped ones over footpaths), `barriers.ts` (park edges: walls, fences,
   hedges, retaining walls, and a default low hedge where a park meets a footpath).
-- `scripts/smoke/` (Playwright: `run.mjs`, one file per area), `scripts/sim-car.ts`. Experiments:
+- `scripts/smoke/` (Playwright: `run.mjs`, one file per area; the map in `map.mjs`), `scripts/sim-car.ts`. Experiments:
   `dizzy.mjs`, `peds.mjs`, `traffic.mjs`, `tweaks.mjs` (the panel on the phone page); hooks `__game.dizzy()`, `peds()`, `town()`,
   `spawnPed(x, z)`, `knobs()`, `knob('dizzy.on', false)`, `dropPlayer(m)`, `hitPlayer(car, speed)`.
   `__game.reset()` also resets every knob, reseeds the pedestrians and takes the town's cars away. Areas that

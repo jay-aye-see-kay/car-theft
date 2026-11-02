@@ -86,6 +86,8 @@ export interface GameMap {
   readonly places?: Gazetteer;
   /** The drivable network: routing, lanes for traffic (real maps only). */
   readonly roads?: RoadGraph;
+  /** The picture of the map from above (map.png, tools/citygen/map.ts) and the ground it covers, for the minimap and full map. */
+  readonly chart?: { url: URL; bounds: { minX: number; minZ: number; maxX: number; maxZ: number } };
   /** Extra numbers for ?debug and the smoke test. */
   debugInfo(): Record<string, number>;
 }
