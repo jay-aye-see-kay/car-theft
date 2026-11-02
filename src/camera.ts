@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
+import { tune, type KnobSpec } from './tweaks.ts';
 
 // GTA III-style follow camera: sits behind the target's heading, swings round
 // lazily, pulls back and widens the FOV with speed, and ducks in front of
@@ -20,6 +21,18 @@ export const ON_FOOT: CameraProfile = { distance: 4.2, height: 1.9, lookHeight: 
 /** Flying (cheat): further back and a little above, to take in whole buildings. */
 export const FLYING: CameraProfile = { distance: 12, height: 3.5, lookHeight: 1, lookAhead: 2, followRate: 1.2, speedPullback: 0.04 };
 
+const PROFILE_KNOBS: Record<keyof CameraProfile, KnobSpec> = {
+  distance: { label: 'Distance behind', min: 1.5, max: 25, step: 0.1, unit: 'm' },
+  height: { label: 'Height', min: 0.3, max: 10, step: 0.1, unit: 'm' },
+  lookHeight: { label: 'Looks at, above', min: 0, max: 4, step: 0.05, unit: 'm' },
+  lookAhead: { label: 'Looks ahead', min: 0, max: 10, step: 0.1, unit: 'm' },
+  followRate: { label: 'Swings behind', min: 0.1, max: 10, step: 0.1, unit: '/s' },
+  speedPullback: { label: 'Pulls back with speed', min: 0, max: 0.3, step: 0.005, unit: 'm per m/s' },
+};
+tune('camera-driving', 'Camera: driving', DRIVING, PROFILE_KNOBS);
+tune('camera-foot', 'Camera: on foot', ON_FOOT, PROFILE_KNOBS);
+tune('camera-flying', 'Camera: flying', FLYING, PROFILE_KNOBS);
+
 const _fwd = new THREE.Vector3();
 const _desired = new THREE.Vector3();
 const _look = new THREE.Vector3();
@@ -37,6 +50,9 @@ export class ChaseCamera {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly world: RAPIER.World;
   private shakeAmount = 0;
+  /** Dizzy: how far the view sways, 0..1, and its own clock (game time, so stepped tests repeat). */
+  private swayAmount = 0;
+  private swayTime = 0;
   private distance = DRIVING.distance;
 
   constructor(camera: THREE.PerspectiveCamera, world: RAPIER.World) {
@@ -94,6 +110,18 @@ export class ChaseCamera {
     this.camera.position.copy(this.smoothedPos);
     this.camera.lookAt(this.smoothedLook);
 
+    // Dizzy: a slow drunken lean and drift, no randomness.
+    this.swayTime += dt;
+    if (this.swayAmount > 0.001) {
+      const a = this.swayAmount;
+      const t = this.swayTime;
+      _toCam.set(Math.cos(this.yawAngle), 0, Math.sin(this.yawAngle));
+      this.camera.position.x += -_toCam.z * Math.sin(t * 1.3) * a * 0.9;
+      this.camera.position.z += _toCam.x * Math.sin(t * 1.3) * a * 0.9;
+      this.camera.position.y += Math.sin(t * 2.1) * a * 0.25;
+      this.camera.rotateZ(Math.sin(t * 1.7) * a * 0.22);
+    }
+
     if (this.shakeAmount > 0.01) {
       const a = this.shakeAmount;
       this.camera.position.x += (Math.random() - 0.5) * a;
@@ -117,6 +145,11 @@ export class ChaseCamera {
   /** Jolt the camera, e.g. on a crash. Strength ~0..1. */
   shake(strength: number): void {
     this.shakeAmount = Math.min(1, Math.max(this.shakeAmount, strength));
+  }
+
+  /** Dizzy: sway the view this much (0..1) from now on; 0 stops. */
+  sway(amount: number): void {
+    this.swayAmount = amount;
   }
 
   /**

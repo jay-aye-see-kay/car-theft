@@ -6,13 +6,22 @@ Drive and walk the real Auckland CBD at 1:1: real street grid, hills,
 building heights and recognisable landmarks, with the feel of GTA III. Start
 with the CBD and grow outwards. The owner plays it on a phone.
 
-"Feels like GTA III" means five things, not the scale:
+"Feels like GTA III" means five things, not the scale, and the tone is
+cheeky, not violent: mischief and good-natured chaos, somewhere between GTA
+and a pottering sandbox, with nobody out to get you.
 
-1. Arcade car handling: weighty, slidey, forgiving, satisfying crashes.
+1. Arcade car handling: weighty, slidey, forgiving, satisfying crashes. Cars
+   never take damage, cosmetic or otherwise.
 2. A chase camera that swings behind the car and pulls back with speed.
-3. Get in and out of any car in one smooth action.
-4. A living city: traffic, pedestrians, a recognisable skyline.
-5. Trouble: a wanted level and cops who come after you.
+3. Get in and out of any car in one smooth action, for free.
+4. A living, bouncy city: traffic, pedestrians, a recognisable skyline. People
+   who get hit fly, tumble, get up and react; nobody dies and there are no guns.
+5. Trouble that costs time, never progress: falls and hits make you dizzy for
+   a few seconds (slow, hard to control, then fine) instead of hurting you, and
+   consequences are funny rather than punishing. No wanted stars or busted screens.
+
+Present-day Auckland with 1990 tech: no phones, screens or LED signs in
+anything new.
 
 ## Tiers
 
@@ -22,9 +31,10 @@ with the CBD and grow outwards. The owner plays it on a phone.
 | 2. Recognisably Auckland | Clean junctions, street furniture, trees, ~8 hand-made landmarks |
 | 3. Whole isthmus | Ponsonby, Parnell, Newmarket, Mt Eden, Harbour Bridge to Devonport, Spaghetti Junction, volcanic cones |
 
-Later, the game layer (parked for now): traffic driving on the left,
-pedestrians, a mission (grab a package from a K Road dairy, get it to the
-ferry terminal in 90 s), a wanted level and police chase, HUD and minimap.
+The game layer is now a lab of experiments, each toggled and tuned live on the
+? panel and playtested on a phone before the v2 rebuild: dizzy, pedestrians
+and bouncy hits (#53) first, then the next ones (#54 on), each in the tone
+above.
 
 ## Decisions
 

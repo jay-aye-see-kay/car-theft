@@ -31,10 +31,28 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
 ## Layout
 
 - `src/main.ts`: game loop (fixed 60 Hz physics, render interpolation), enter/exit, HUD, `?debug` hooks
-- `src/car.ts` (`TUNING`), `src/corolla.ts` (model, `bake()`), `src/player.ts`, `src/camera.ts`,
+- `src/car.ts` (`TUNING`), `src/corolla.ts` (model, `bake()`), `src/player.ts` (also the body plan
+  pedestrians share), `src/camera.ts`,
   `src/input.ts` (touch/keyboard/gamepad), `src/cheats.ts` (stick-flick codes: ↑↑↓↓←→←→ flies),
   `src/audio.ts` (synthesised), `src/skids.ts`
 - `src/sky.ts`, `src/sun.ts`, `src/splash.ts` (title screen with data credits)
+- **Experiments** (#53 on): v1 is a lab for finding out what's fun. Tone: cheeky, not violent (`docs/BRIEF.md`).
+  - `src/tweaks.ts` + `src/tweaks-panel.ts`: the **? panel** (button by mute, `?` key), the playtest
+    tool. The game pauses while it's open. A mechanic registers its own section where it's defined:
+    `export const FOO = mechanic('foo', 'Foo', true, { speed: knob(4, 'Label', min, max, step, 'm/s') })`
+    gives a live `{ on, speed }` object to read each tick (the panel writes into it); an existing table is
+    bound in place with `tune(id, title, obj, specs, onChange?)` (car `TUNING`, camera profiles; `onChange`
+    re-applies anything baked in at construction). Changed values persist in localStorage (`gta.tweaks`);
+    Copy gives them as JSON to paste into an issue and make the defaults. No query parameters for knobs.
+  - `src/dizzy.ts` (`DIZZY`, `CRASH_DIZZY`): falls, car hits on foot and big crashes (driver) make you dizzy:
+    slow, mushy, drifting controls, camera sway (`ChaseCamera.sway`), wobble, `src/stars.ts` overhead
+    (instanced, shared with pedestrians); wiggling shakes it off; immune for a bit after.
+  - `src/peds.ts` (`PEDS`, `HITS`): pedestrians on the road graph's footpaths (`KERB_GAP` past the
+    carriageway), seeded (`reset(seed)`), spawned out of view; no colliders: a car within reach launches
+    them on a scripted arc (bounce, lie, get up, react: fist and "Oi!", chase, dust off). `src/peds-mesh.ts`
+    draws everyone in one instanced call (limbs swung in the vertex shader) plus one for shadows;
+    `src/bubbles.ts` speech bubbles; `audio.bark()`. `CarSpeeds` measures cars per tick (kinematic ones too).
+    Each client runs its own (not shared in rooms).
 - `src/maps/`: `auckland.ts` (default) and `test-town.ts` (`?map=test`)
 - `src/missions/`: one file per mission (`defineMission`, picked up by `import.meta.glob`).
   `runtime/`: `mission.ts` (the script API), `runner.ts` (runs scripts in game time; a mission
@@ -75,7 +93,10 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   Parks: `ground.ts` (land use, park paths, canopy cover: shade near, canopy tint far), `trees.ts` (OSM trees plus
   LiDAR treetops on green ground and tree-shaped ones over footpaths), `barriers.ts` (park edges: walls, fences,
   hedges, retaining walls, and a default low hedge where a park meets a footpath).
-- `scripts/smoke/` (Playwright: `run.mjs`, one file per area), `scripts/sim-car.ts`
+- `scripts/smoke/` (Playwright: `run.mjs`, one file per area), `scripts/sim-car.ts`. Experiments:
+  `dizzy.mjs`, `peds.mjs`, `tweaks.mjs` (the panel on the phone page); hooks `__game.dizzy()`, `peds()`,
+  `spawnPed(x, z)`, `knobs()`, `knob('dizzy.on', false)`, `dropPlayer(m)`, `hitPlayer(car, speed)`.
+  `__game.reset()` also resets every knob and reseeds the pedestrians.
 
 ## Conventions
 
@@ -102,7 +123,8 @@ Measured at `__game.view('spawn' | 'queen-st' | 'aerial')` with `?debug`
 | Street (`spawn`, `queen-st`) | < 150k | < 60 |
 | Aerial | < 300k | < 100 |
 
-Street view is ~148k / ~52 today (a visible mission marker is one call). Each chunk is one draw call: put new static
+Street view is ~145k / ~45 today (a visible mission marker is one call; pedestrians are
+two calls and ~170 triangles each, dizzy stars one call when anyone's dizzy). Each chunk is one draw call: put new static
 geometry into `ChunkMesh` (vertex colours, shared materials/atlas), not new
 meshes. Small building detail goes in `MeshBuilder.detail()`: near-only
 (within 250 m: verandahs, parapets) or fine (120 m: cornices, plant, eaves).

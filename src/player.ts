@@ -56,11 +56,18 @@ export class Player {
   stepped = false;
   /** Flying (cheat): see setFlying(). */
   flying = false;
+  /** Fastest downward speed at a landing since last read, m/s (falls make you dizzy). Reset it after reading. */
+  landed = 0;
+  /** Dizzy: how much the body sways, 0..1. */
+  wobble = 0;
 
   private readonly controller: RAPIER.KinematicCharacterController;
   private readonly velocity = new THREE.Vector3();
   private grounded = true;
   private walkPhase = 0;
+  private wobbleTime = 0;
+  /** Knocked about (hit by a car, a shoulder charge): no control for this long, s. */
+  private stunned = 0;
   private readonly prevPos = new THREE.Vector3();
   private readonly currPos = new THREE.Vector3();
   private readonly limbs: { legL: THREE.Object3D; legR: THREE.Object3D; armL: THREE.Object3D; armR: THREE.Object3D; torso: THREE.Object3D };
@@ -92,16 +99,19 @@ export class Player {
   /** Move for one fixed step. Call before world.step(). */
   update(c: FootControls, dt: number): void {
     if (this.flying) return this.fly(c, dt);
-    const len = Math.min(1, Math.hypot(c.moveX, c.moveZ));
+    // Knocked flying: the stick does nothing until it wears off; on the ground you skid to a stop.
+    const stunned = this.stunned > 0;
+    this.stunned = Math.max(0, this.stunned - dt);
+    const len = stunned ? 0 : Math.min(1, Math.hypot(c.moveX, c.moveZ));
     const target = len > 0.05 ? (c.sprint ? MOVE.sprint : MOVE.jog) * len : 0;
     const tx = len > 0.05 ? (c.moveX / Math.max(len, 1e-6)) * target : 0;
     const tz = len > 0.05 ? (c.moveZ / Math.max(len, 1e-6)) * target : 0;
-    const k = 1 - Math.exp(-MOVE.accel * dt * (this.grounded ? 1 : 0.25));
+    const k = 1 - Math.exp(-MOVE.accel * dt * (this.grounded ? (stunned ? 0.35 : 1) : stunned ? 0 : 0.25));
     this.velocity.x += (tx - this.velocity.x) * k;
     this.velocity.z += (tz - this.velocity.z) * k;
 
     if (this.grounded) {
-      this.velocity.y = c.jump ? MOVE.jumpSpeed : -1;
+      this.velocity.y = c.jump && !stunned ? MOVE.jumpSpeed : -1;
     } else {
       this.velocity.y -= MOVE.gravity * dt;
     }
@@ -117,18 +127,36 @@ export class Player {
     // Ground snapping would cancel the start of a jump.
     if (this.velocity.y > 0) this.controller.disableSnapToGround();
     else this.controller.enableSnapToGround(0.4);
-    this.controller.computeColliderMovement(this.collider, _move.copy(this.velocity).multiplyScalar(dt));
+    // Knocked flying by a car: don't let the car that's still touching you hold you down.
+    const flags = stunned ? RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC | RAPIER.QueryFilterFlags.EXCLUDE_KINEMATIC : undefined;
+    this.controller.computeColliderMovement(this.collider, _move.copy(this.velocity).multiplyScalar(dt), flags);
     const m = this.controller.computedMovement();
     const wasGrounded = this.grounded;
     this.grounded = this.controller.computedGrounded();
+    if (!wasGrounded && this.grounded) {
+      this.stepped = true; // landing thud
+      this.landed = Math.max(this.landed, -this.velocity.y);
+    }
     if (this.grounded && this.velocity.y < 0) this.velocity.y = -1;
-    if (!wasGrounded && this.grounded) this.stepped = true; // landing thud
     // Hitting a ceiling (or a car roof from below) kills upward speed.
     if (this.velocity.y > 0 && m.y < this.velocity.y * dt * 0.5) this.velocity.y = 0;
 
     const t = this.body.translation();
     this.body.setNextKinematicTranslation({ x: t.x + m.x, y: t.y + m.y, z: t.z + m.z });
     this.speed = Math.hypot(m.x, m.z) / dt;
+  }
+
+  /** Shoved: this velocity now (m/s, world), and no control for `stun` seconds. */
+  knock(vx: number, vy: number, vz: number, stun: number): void {
+    if (this.flying) return;
+    this.velocity.set(vx, vy, vz);
+    if (vy > 0) this.grounded = false;
+    this.stunned = Math.max(this.stunned, stun);
+  }
+
+  /** Moving under our own control (not knocked about). */
+  get inControl(): boolean {
+    return this.stunned <= 0;
   }
 
   /**
@@ -178,7 +206,10 @@ export class Player {
 
   render(alpha: number, dt: number): void {
     this.object.position.lerpVectors(this.prevPos, this.currPos, alpha);
-    this.object.rotation.set(0, this.heading, 0);
+    // Dizzy: a drunken lean, round and round (heading first, then the tilt).
+    this.wobbleTime += dt;
+    const w = this.wobble;
+    this.object.rotation.set(Math.sin(this.wobbleTime * 4.3) * 0.16 * w, this.heading, Math.sin(this.wobbleTime * 3.1) * 0.12 * w, 'YXZ');
 
     // Walk cycle: swing limbs in proportion to speed; tuck when airborne.
     const { legL, legR, armL, armR, torso } = this.limbs;
@@ -218,6 +249,8 @@ export class Player {
     this.velocity.set(0, 0, 0);
     this.speed = 0;
     this.grounded = false;
+    this.stunned = 0;
+    this.landed = 0;
     this.syncPose();
     this.prevPos.copy(this.currPos);
   }
@@ -251,60 +284,88 @@ export class Player {
   }
 }
 
-// Shorts, a black tee and jandals. Origin at the feet, facing +x. Each
-// moving part (torso with head, two arms, two legs) is one vertex-coloured
-// mesh, so the whole person is 5 draw calls.
+// The body plan, shared with the pedestrians (peds.ts draws them instanced):
+// boxes on five moving parts, each coloured by slot. Origin at the feet,
+// facing +x; legs swing from the hips, arms from the shoulders, which ride
+// on the torso.
+
+export type Part = 'torso' | 'legL' | 'legR' | 'armL' | 'armR';
+export const PARTS: readonly Part[] = ['torso', 'legL', 'legR', 'armL', 'armR'];
+/** What colours each box: shins and forearms are skin or clothes, by outfit. */
+export type Slot = 'skin' | 'top' | 'bottom' | 'hair' | 'shoes' | 'shin' | 'forearm';
+export const SLOTS: readonly Slot[] = ['skin', 'top', 'bottom', 'hair', 'shoes', 'shin', 'forearm'];
+/** Pivots, from the feet (arms' from the torso's pivot). */
+export const PIVOTS: Record<Part, [number, number, number]> = {
+  torso: [0, 0.86, 0],
+  legL: [0, 0.86, -0.11],
+  legR: [0, 0.86, 0.11],
+  armL: [0, 0.54, -0.28],
+  armR: [0, 0.54, 0.28],
+};
+type Box = [w: number, h: number, d: number, slot: Slot, x: number, y: number, z: number];
+const LEG: Box[] = [
+  [0.17, 0.36, 0.17, 'bottom', 0, -0.16, 0],
+  [0.13, 0.46, 0.13, 'shin', 0, -0.56, 0],
+  [0.26, 0.04, 0.12, 'shoes', 0.04, -0.84, 0],
+];
+const ARM: Box[] = [[0.13, 0.22, 0.13, 'top', 0, -0.08, 0], [0.1, 0.4, 0.1, 'forearm', 0, -0.38, 0]];
+/** Boxes relative to their part's pivot. */
+export const BODY: Record<Part, Box[]> = {
+  torso: [
+    [0.26, 0.56, 0.44, 'top', 0, 0.3, 0],
+    [0.12, 0.08, 0.12, 'skin', 0, 0.62, 0], // neck
+    [0.24, 0.26, 0.22, 'skin', 0.01, 0.78, 0], // head
+    [0.26, 0.08, 0.24, 'hair', -0.01, 0.92, 0],
+  ],
+  legL: LEG,
+  legR: LEG,
+  armL: ARM,
+  armR: ARM,
+};
+
+/** One part's boxes merged, with a slot index per vertex (for colouring). */
+export function partGeometry(part: Part): THREE.BufferGeometry {
+  const geos = BODY[part].map(([w, h, d, slot, x, y, z]) => {
+    const g = new THREE.BoxGeometry(w, h, d).translate(x, y, z).toNonIndexed();
+    g.deleteAttribute('uv');
+    g.setAttribute('slot', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count).fill(SLOTS.indexOf(slot)), 1));
+    return g;
+  });
+  return mergeGeometries(geos);
+}
+
+// The player: shorts, a black tee and jandals. Each moving part is one
+// vertex-coloured mesh, so the whole person is 5 draw calls.
 function buildPerson() {
   const root = new THREE.Group();
   const material = new THREE.MeshLambertMaterial({ vertexColors: true });
   const skin = new THREE.Color(0xc68a62);
-  const shirt = new THREE.Color(0x1d1d22);
-  const shorts = new THREE.Color(0x2f4f7a);
-  const hair = new THREE.Color(0x1a120c);
-  const jandal = new THREE.Color(0x2a6fd6);
+  const top = new THREE.Color(0x1d1d22);
+  const bottom = new THREE.Color(0x2f4f7a);
+  const colours: Record<Slot, THREE.Color> = { skin, top, bottom, hair: new THREE.Color(0x1a120c), shoes: new THREE.Color(0x2a6fd6), shin: skin, forearm: skin };
 
-  type Box = [w: number, h: number, d: number, colour: THREE.Color, x: number, y: number, z: number];
-  const mesh = (boxes: Box[]) => {
-    const geos = boxes.map(([w, h, d, colour, x, y, z]) => {
-      const g = new THREE.BoxGeometry(w, h, d).translate(x, y, z).toNonIndexed();
-      g.deleteAttribute('uv');
-      const colours = new Float32Array(g.attributes.position.count * 3);
-      for (let i = 0; i < colours.length; i += 3) colour.toArray(colours, i);
-      g.setAttribute('color', new THREE.BufferAttribute(colours, 3));
-      return g;
-    });
-    return new THREE.Mesh(mergeGeometries(geos), material);
+  const mesh = (part: Part) => {
+    const g = partGeometry(part);
+    const slot = g.attributes.slot.array;
+    const c = new Float32Array(slot.length * 3);
+    for (let i = 0; i < slot.length; i++) colours[SLOTS[slot[i]]].toArray(c, i * 3);
+    g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+    g.deleteAttribute('slot');
+    return new THREE.Mesh(g, material);
   };
-
   // Limbs hang from pivots at the hip and shoulder so they can swing.
-  const limb = (x: number, y: number, z: number, boxes: Box[]) => {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, y, z);
-    pivot.add(mesh(boxes));
-    return pivot;
+  const pivot = (part: Part) => {
+    const p = new THREE.Group();
+    p.position.fromArray(PIVOTS[part]);
+    p.add(mesh(part));
+    return p;
   };
-
-  const leg: Box[] = [
-    [0.17, 0.36, 0.17, shorts, 0, -0.16, 0],
-    [0.13, 0.46, 0.13, skin, 0, -0.56, 0],
-    [0.26, 0.04, 0.12, jandal, 0.04, -0.84, 0],
-  ];
-  const legL = limb(0, 0.86, -0.11, leg);
-  const legR = limb(0, 0.86, 0.11, leg);
-
-  const torso = new THREE.Group();
-  torso.position.y = 0.86;
-  torso.add(mesh([
-    [0.26, 0.56, 0.44, shirt, 0, 0.3, 0],
-    [0.12, 0.08, 0.12, skin, 0, 0.62, 0], // neck
-    [0.24, 0.26, 0.22, skin, 0.01, 0.78, 0], // head
-    [0.26, 0.08, 0.24, hair, -0.01, 0.92, 0],
-  ]));
-  const arm: Box[] = [[0.13, 0.22, 0.13, shirt, 0, -0.08, 0], [0.1, 0.4, 0.1, skin, 0, -0.38, 0]];
-  const armL = limb(0, 0.54, -0.28, arm);
-  const armR = limb(0, 0.54, 0.28, arm);
+  const legL = pivot('legL');
+  const legR = pivot('legR');
+  const torso = pivot('torso');
+  const armL = pivot('armL');
+  const armR = pivot('armR');
   torso.add(armL, armR);
-
   root.add(legL, legR, torso);
   return { root, legL, legR, armL, armR, torso };
 }

@@ -21,6 +21,7 @@ export class GameAudio {
   private noise!: AudioBuffer;
   private lastImpact = 0;
   private muted = false;
+  private paused = false;
 
   constructor() {
     try {
@@ -40,7 +41,7 @@ export class GameAudio {
 
   unlock(): void {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
+      if (this.ctx.state === 'suspended' && !this.paused) void this.ctx.resume();
       return;
     }
     const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -216,6 +217,52 @@ export class GameAudio {
       osc.start(at);
       osc.stop(at + len + 0.02);
     }
+  }
+
+  /**
+   * Someone yelling "Oi!": a buzzy voice through two formant filters gliding
+   * from "o" to "i", the pitch rising then falling. `volume` 0..1 by distance,
+   * `pitch` ~0.8..1.3 so everyone sounds a bit different.
+   */
+  bark(volume: number, pitch = 1): void {
+    if (!this.ctx || volume <= 0.02) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const len = 0.38;
+    const voice = ctx.createOscillator();
+    voice.type = 'sawtooth';
+    const f0 = 170 * pitch;
+    voice.frequency.setValueAtTime(f0, t);
+    voice.frequency.linearRampToValueAtTime(f0 * 1.35, t + 0.1);
+    voice.frequency.exponentialRampToValueAtTime(f0 * 0.8, t + len);
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(0.5 * Math.min(1, volume), t + 0.03);
+    out.gain.setValueAtTime(0.5 * Math.min(1, volume), t + len - 0.12);
+    out.gain.exponentialRampToValueAtTime(0.001, t + len);
+    // "o" (F1 ~500, F2 ~850) gliding to "i" (F1 ~300, F2 ~2300).
+    for (const [from, to, q, gain] of [[520, 300, 6, 1], [850, 2300, 9, 0.7]]) {
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.Q.value = q;
+      f.frequency.setValueAtTime(from * pitch, t);
+      f.frequency.setValueAtTime(from * pitch, t + 0.08);
+      f.frequency.exponentialRampToValueAtTime(to * pitch, t + 0.22);
+      const g = ctx.createGain();
+      g.gain.value = gain;
+      voice.connect(f).connect(g).connect(out);
+    }
+    out.connect(this.master);
+    voice.start(t);
+    voice.stop(t + len + 0.02);
+  }
+
+  /** Paused (the ? panel is open): everything goes quiet. */
+  setPaused(on: boolean): void {
+    this.paused = on;
+    if (!this.ctx) return;
+    if (on && this.ctx.state === 'running') void this.ctx.suspend();
+    else if (!on && this.ctx.state === 'suspended') void this.ctx.resume();
   }
 
   footstep(): void {

@@ -4,10 +4,17 @@ import { GameAudio } from './audio.ts';
 import { ChaseCamera, DRIVING, FLYING, ON_FOOT } from './camera.ts';
 import { FLY_CODE, StickCode } from './cheats.ts';
 import { TERRAIN_ONLY_QUERY } from './city/building-chunk.ts';
-import { Car } from './car.ts';
+import { Bubbles } from './bubbles.ts';
+import { Car, CHASSIS_HALF } from './car.ts';
+import { CRASH_DIZZY, DIZZY, Dizzy, severity } from './dizzy.ts';
 import { Input } from './input.ts';
+import { CarSpeeds, HITS, inside, Peds, type CarLike } from './peds.ts';
+import { PedsMesh } from './peds-mesh.ts';
 import { Player } from './player.ts';
 import { SkidMarks } from './skids.ts';
+import { DizzyStars } from './stars.ts';
+import { allValues, resetValues, setValue, useStorage } from './tweaks.ts';
+import { TweaksPanel } from './tweaks-panel.ts';
 import { Sky } from './sky.ts';
 import { SUN_DIRECTION } from './sun.ts';
 import { Splash } from './splash.ts';
@@ -54,6 +61,12 @@ const CAR_DRAW = 600;
 /** Default names in a room, with a number on the end. */
 const NICKNAMES = ['Kūmara', 'Pūkeko', 'Jandal', 'Pavlova', 'Tui', 'Kea', 'Chur', 'Cuz', 'Hokey Pokey', 'Pineapple Lump', 'Sweet As', 'Hard Out'];
 const NAME_KEY = 'gta.name';
+/** A car hitting you on foot: not again for this long, s (it's still touching). */
+const HIT_COOLDOWN = 1;
+/** Speech bubbles sit this far above the feet, m. */
+const BUBBLE_LIFT = 2.25;
+/** "Oi!" fades out by this far from the camera, m. */
+const BARK_RANGE = 60;
 
 async function main() {
   const app = document.getElementById('app')!;
@@ -117,6 +130,16 @@ async function main() {
   const splashes = new Splash();
   scene.add(splashes.points);
 
+  const storage = (() => {
+    try {
+      return localStorage;
+    } catch {
+      return null; // blocked (some private modes): best times and tuning just aren't kept
+    }
+  })();
+  // The ? panel's tuning from last time, before anything is built from it.
+  useStorage(storage);
+
   // Cheap blob shadows instead of real-time shadow maps.
   const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false });
   const carShadow = new THREE.PlaneGeometry(4.6, 2.1).rotateX(-Math.PI / 2);
@@ -142,14 +165,23 @@ async function main() {
   const skids = new SkidMarks();
   scene.add(skids.mesh);
 
+  // Dizzy (src/dizzy.ts) with stars over the head, and the pedestrians
+  // (Auckland only: they walk the road graph's footpaths).
+  const dizzy = new Dizzy();
+  const stars = new DizzyStars();
+  scene.add(stars.mesh);
+  const peds = map.roads ? new Peds({ roads: map.roads, world, heightAt: (x, z) => map.heightAt(x, z), surfaceAt: map.surfaceAt && ((x, z) => map.surfaceAt!(x, z)) }) : null;
+  const pedsMesh = new PedsMesh(shadowMat);
+  scene.add(pedsMesh.mesh, pedsMesh.shadows);
+  const carSpeeds = new CarSpeeds();
+  const carLikes: CarLike[] = cars.map(({ car }) => ({ body: car.body, half: CHASSIS_HALF, player: false }));
+  /** When each car last hit the player on foot, game s. */
+  const hitPlayerAt = cars.map(() => -Infinity);
+  /** On-foot stick and the steering, eased (dizzy makes them mushy). */
+  const eased = { x: 0, z: 0, steer: 0 };
+  const dizzyDrive = { throttle: 0, brake: 0, steer: 0, handbrake: false };
+
   // Missions: Auckland only, since their places are real streets (the map's gazetteer).
-  const storage = (() => {
-    try {
-      return localStorage;
-    } catch {
-      return null; // blocked (some private modes): best times just aren't kept
-    }
-  })();
   const missions = map.places ? new MissionRunner(MISSIONS, map.places, (x, z) => map.heightAt(x, z), storage) : null;
   const markers = new MissionMarkers();
   scene.add(markers.group);
@@ -185,6 +217,16 @@ async function main() {
   });
   const roomPanel = new RoomPanel(hud, room);
   roomPanel.onRename = (name) => storage?.setItem(NAME_KEY, name);
+  const bubbles = new Bubbles(hud);
+  // The ? panel: the game pauses while it's open.
+  let paused = false;
+  const tweaksPanel = new TweaksPanel(hud);
+  tweaksPanel.toast = (text) => roomPanel.toast(text);
+  tweaksPanel.onToggle = (open) => {
+    paused = open;
+    audio.setPaused(open);
+    input.clearPresses();
+  };
   const roomNote = document.createElement('p');
   roomNote.className = 'sub';
   status.after(roomNote);
@@ -515,6 +557,52 @@ async function main() {
   let drawRequested = false;
 
   /**
+   * Every fixed tick after the physics step: landings and car hits make you
+   * dizzy (and knock you flying), and the pedestrians walk, get hit and react.
+   */
+  const afterTick = (drivingIndex: number) => {
+    const speeds = carSpeeds.measure(carLikes, FIXED_DT);
+    const onFoot = !driving && !player.flying;
+    const body = player.body.translation();
+    if (onFoot && player.landed > 0) {
+      if (player.landed > DIZZY.fallSpeed) dizzy.trigger(severity(player.landed, DIZZY.fallSpeed), 'fall');
+      player.landed = 0;
+    }
+    if (onFoot) {
+      // A moving car (someone else's, or one rolling on its own) reaching you on foot.
+      for (const [i, c] of carLikes.entries()) {
+        const v = speeds[i];
+        if (!v || cars[i].frozen || tickClock - hitPlayerAt[i] < HIT_COOLDOWN) continue;
+        if (v.speed < Math.min(DIZZY.hitSpeed, HITS.minSpeed) || !inside(c, body.x, body.y, body.z, 0.35)) continue;
+        hitPlayerAt[i] = tickClock;
+        if (HITS.on) {
+          const t = c.body.translation();
+          const ax = body.x - t.x;
+          const az = body.z - t.z;
+          const al = Math.hypot(ax, az) || 1;
+          // Like the pedestrians, a bit gentler: along the car, away from its middle, and up.
+          player.knock(v.vx * HITS.launch * 0.7 + (ax / al) * 2, Math.min(12, HITS.upBoost + v.speed * 0.15), v.vz * HITS.launch * 0.7 + (az / al) * 2, 0.9);
+        }
+        if (v.speed > DIZZY.hitSpeed) dizzy.trigger(severity(v.speed, DIZZY.hitSpeed), 'hit');
+        audio.impact(Math.min(0.7, 0.2 + v.speed / 25));
+        chase.shake(0.4);
+      }
+    }
+    if (peds) {
+      for (const [i, c] of carLikes.entries()) c.player = i === drivingIndex;
+      const focus = driving ? driving.body.translation() : body;
+      const h = player.heading;
+      const walker = onFoot ? { x: body.x, y: body.y, z: body.z, vx: Math.cos(h) * player.speed, vz: -Math.sin(h) * player.speed, speed: player.inControl ? player.speed : 0 } : null;
+      const { stumble } = peds.step(FIXED_DT, focus, chase.yaw, carLikes, speeds.map((v, i) => (cars[i].frozen ? null : v)), walker);
+      // Ran into someone: you bounce off them too.
+      if (stumble && onFoot) player.knock(stumble.x * 2.5, 2.2, stumble.z * 2.5, 0.6);
+    }
+    tickClock += FIXED_DT;
+  };
+  /** Game time in fixed ticks (afterTick's clock). */
+  let tickClock = 0;
+
+  /**
    * One frame of game logic: input, physics steps for `frameDt` of game
    * time, then interpolation, camera, audio and HUD (everything but the
    * draw). `alpha` overrides the interpolation between physics poses.
@@ -540,10 +628,34 @@ async function main() {
     }
     const jump = input.consume('jump');
 
+    // Dizzy: wiggling the stick or mashing jump / handbrake shakes it off sooner.
+    dizzy.update(frameDt, input.moveX, input.moveY, jump ? 1 : 0);
+    const daze = dizzy.amount;
+    // Mush: the controls lag and drift, more the dizzier you are.
+    const ease = 1 - Math.exp(-frameDt * THREE.MathUtils.lerp(40, 2.5, daze * DIZZY.mush));
+    const dizzyT = dizzy.time;
+    const drift = daze * DIZZY.mush * (Math.sin(dizzyT * 2.3) * 0.9 + Math.sin(dizzyT * 0.83) * 0.6);
+    const slow = 1 - DIZZY.slowdown * daze;
+
     // Camera-relative movement on foot: stick up walks away from the camera.
-    const cy = chase.yaw;
-    const moveX = Math.cos(cy) * input.moveY - Math.sin(cy) * input.moveX;
-    const moveZ = Math.sin(cy) * input.moveY + Math.cos(cy) * input.moveX;
+    const cy = chase.yaw + drift;
+    let moveX = (Math.cos(cy) * input.moveY - Math.sin(cy) * input.moveX) * slow;
+    let moveZ = (Math.sin(cy) * input.moveY + Math.cos(cy) * input.moveX) * slow;
+    if (daze > 0) {
+      // Staggering about even with hands off the stick.
+      moveX += Math.cos(dizzyT * 0.9) * 0.3 * daze * DIZZY.mush;
+      moveZ += Math.sin(dizzyT * 1.3) * 0.3 * daze * DIZZY.mush;
+    }
+    eased.x += (moveX - eased.x) * ease;
+    eased.z += (moveZ - eased.z) * ease;
+    moveX = eased.x;
+    moveZ = eased.z;
+    const sprint = input.sprint && daze === 0;
+    eased.steer += (input.drive.steer - eased.steer) * ease;
+    Object.assign(dizzyDrive, input.drive, {
+      steer: THREE.MathUtils.clamp(eased.steer + drift * 0.6, -1, 1),
+      throttle: input.drive.throttle * (1 - DIZZY.slowdown * daze * 0.6),
+    });
 
     map.update(debugView ? _p.fromArray(debugView.from) : driving ? driving.object.position : player.position);
     // Into the harbour: a splash, a moment sinking (heavily damped, like
@@ -604,13 +716,14 @@ async function main() {
         if (car !== driving) car.update(remotes.controlsFor(car), FIXED_DT);
         // Like GTA III: asking to get out at speed brakes to a stop first.
         else if (exitRequested) car.update({ throttle: 0, brake: Math.abs(car.forwardSpeed()) > 1 ? 1 : 0, steer: 0, handbrake: false }, FIXED_DT);
-        else car.update(input.drive, FIXED_DT);
+        else car.update(dizzyDrive, FIXED_DT);
       }
-      if (!driving && !playerFrozen) player.update({ moveX, moveZ, sprint: input.sprint, jump: jump && steps === 0, rise: input.rise, floor }, FIXED_DT);
+      if (!driving && !playerFrozen) player.update({ moveX, moveZ, sprint, jump: jump && steps === 0, rise: input.rise, floor }, FIXED_DT);
       world.step();
       for (const { car, frozen } of cars) if (!frozen) car.afterStep(FIXED_DT);
       if (!driving) player.afterStep();
       remotes.afterStep();
+      afterTick(drivingIndex);
       accumulator -= FIXED_DT;
       steps++;
     }
@@ -656,7 +769,10 @@ async function main() {
         audio.impact(strength);
         chase.shake(strength * 0.6);
       }
-      if (car === driving) crash = car.impact;
+      if (car === driving) {
+        crash = car.impact;
+        if (CRASH_DIZZY.on && car.impact > CRASH_DIZZY.impact) dizzy.trigger(severity(car.impact, CRASH_DIZZY.impact), 'crash');
+      }
       car.impact = 0;
     }
     skids.flush();
@@ -683,6 +799,28 @@ async function main() {
       if (player.stepped && !player.flying) audio.footstep();
     }
     player.stepped = false;
+
+    // Seeing stars: over your head, or over the car if you're driving.
+    player.wobble = driving ? 0 : daze;
+    chase.sway(daze * DIZZY.sway);
+    stars.begin();
+    if (daze > 0) {
+      const at = driving ? driving.object.position : player.position;
+      stars.add(at.x, at.y + (driving ? 1.25 : 1.95), at.z, daze, clock);
+    }
+    if (peds) {
+      pedsMesh.update(peds.list, alpha, frameDt, camera.position, (x, y, z, a, t) => stars.add(x, y, z, a, t));
+      for (const e of peds.events) {
+        const near = 1 - _p.set(e.x, e.y, e.z).distanceTo(camera.position) / BARK_RANGE;
+        if (e.kind === 'hit') {
+          audio.impact(Math.min(0.6, 0.15 + e.speed / 30) * (e.byPlayer ? 1 : Math.max(0, near)));
+          if (e.byPlayer) chase.shake(0.25);
+        } else if (e.kind === 'bounce' && near > 0) audio.impact(e.strength * 0.2 * near);
+        else if (e.kind === 'bark') audio.bark(near, e.pitch);
+      }
+      peds.events.length = 0;
+    } else pedsMesh.update([], alpha, frameDt, camera.position, () => {});
+    stars.end();
 
     // Missions run on physics poses, not interpolated ones, so stepped tests replay exactly.
     if (missions && started) {
@@ -723,6 +861,7 @@ async function main() {
     water?.update(camera, clock);
     camera.updateMatrixWorld();
     remotes.render(alpha, frameDt, camera);
+    bubbles.update(peds ? peds.list.filter((p) => p.saysFor > 0).map((p) => ({ x: p.x, y: p.y + BUBBLE_LIFT, z: p.z, text: p.says })) : [], camera);
     room.tick(clock);
     if (missions) {
       const view = missions.view();
@@ -743,8 +882,9 @@ async function main() {
     const t0 = performance.now();
     const frameDt = Math.min((now - last) / 1000, 0.1);
     last = now;
-    if (!manual) frame(frameDt);
-    else {
+    if (!manual) {
+      if (!paused) frame(frameDt);
+    } else {
       // Paused: fixed viewpoints still stream the city round them, but
       // nothing is drawn until a test asks (software rendering is slow).
       if (debugView) {
@@ -825,6 +965,10 @@ async function main() {
         skid: driving?.skid ?? 0,
         skidQuads: skids.laid,
         nearCar: !!nearestCar(),
+        /** The ? panel is open (the game is paused). */
+        paused,
+        dizzy: dizzy.active,
+        peds: peds?.list.length ?? 0,
         cars: cars.map(({ car }) => car.object.position.toArray()),
         audio: audio.state,
         fps,
@@ -1014,6 +1158,42 @@ async function main() {
           }),
         };
       },
+      /** Dizzy: whether you are, for how much longer, immune, what did it, wiggles that cut it short. */
+      dizzy: () => dizzy.debug(),
+      /** Pedestrians near the player: each one's state, position and what they're saying, plus totals. */
+      peds: () => ({ list: peds?.debug() ?? [], stats: peds?.stats ?? null, drawn: pedsMesh.mesh.count, stars: stars.drawn }),
+      /** Someone standing still at (x, z) (a test target); returns their id. */
+      spawnPed: async (x: number, z: number, heading = 0) => {
+        await map.ensureLoaded(x, z);
+        return peds?.spawnAt(x, z, heading)?.id ?? null;
+      },
+      /** Every ? panel value by section, or set one: knob('dizzy.on', false), knob('peds.count', 4). */
+      knobs: () => allValues(),
+      knob: (path: string, value: number | boolean) => {
+        const [id, key] = path.split('.');
+        setValue(id, key, value);
+        return allValues()[id];
+      },
+      /** Lift the player (on foot) this high above the ground where they stand, to fall. */
+      dropPlayer: (height: number) => {
+        const p = player.body.translation();
+        const g = map.heightAt(p.x, p.z, p.y - 0.9);
+        player.place(new THREE.Vector3(p.x, (Number.isNaN(g) ? p.y : g) + height, p.z), player.heading);
+      },
+      /**
+       * Send car `index` at the player on foot at `speed` m/s from `from` m
+       * away (behind them), to test being hit.
+       */
+      hitPlayer: (index: number, speed: number, from = 6) => {
+        const p = player.body.translation();
+        const h = player.heading;
+        const x = p.x - Math.cos(h) * from;
+        const z = p.z + Math.sin(h) * from;
+        const car = cars[index].car;
+        const g = map.heightAt(x, z);
+        car.place(new THREE.Vector3(x, (Number.isNaN(g) ? p.y : g) + 0.9, z), h);
+        car.body.setLinvel({ x: Math.cos(h) * speed, y: 0, z: -Math.sin(h) * speed }, true);
+      },
       step,
       /** Manual mode: draw a frame (for a screenshot); resolves once it's on screen. */
       draw: async () => {
@@ -1046,6 +1226,14 @@ async function main() {
         playerSoaked = null;
         upsideDownTime = 0;
         missions?.reset();
+        tweaksPanel.toggle(false);
+        resetValues();
+        dizzy.reset();
+        peds?.reset(1);
+        carSpeeds.reset();
+        hitPlayerAt.fill(-Infinity);
+        eased.x = eased.z = eased.steer = 0;
+        tickClock = 0;
         input.clearPresses();
         chase.snap(map.spawn.heading);
         await step(2); // and stays paused: what follows is stepped from here

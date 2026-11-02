@@ -40,6 +40,8 @@ export default {
   page: 'auckland',
   async run(t) {
     const { check, game, step, getIn, getOut, shot } = t;
+    // Collision only: ramming the wall would make the driver dizzy, and the sprint after it wander.
+    await game('knob', 'crash-dizzy.on', false);
     check((await getIn()).mode === 'car', 'gets in to ram the wall');
     await game('teleportCar', 0, -3, -32, AT_WALL);
     await step(36); // settle on the suspension

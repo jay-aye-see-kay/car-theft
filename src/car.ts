@@ -1,6 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { buildCorolla, buildWheel, COROLLA } from './corolla.ts';
+import { tune } from './tweaks.ts';
 
 export interface DriveControls {
   throttle: number; // 0..1
@@ -10,8 +11,8 @@ export interface DriveControls {
 }
 
 // Handling numbers. These are tuned for arcade feel, not realism: a 1995
-// Corolla does not do 0-100 in 5 seconds.
-const TUNING = {
+// Corolla does not do 0-100 in 5 seconds. All of them are on the ? panel.
+export const TUNING = {
   mass: 1100,
   engineForce: 4200, // per driven wheel, N
   reverseForce: 2600,
@@ -34,8 +35,36 @@ const TUNING = {
   maxSuspensionForce: 100000,
 };
 
+/** Every car, so a change on the ? panel reaches the ones already built. */
+const ALL = new Set<Car>();
+
+const n = (label: string, min: number, max: number, step: number, unit?: string) => ({ label, min, max, step, unit });
+tune('car', 'Car handling', TUNING, {
+  mass: n('Mass', 500, 3000, 10, 'kg'),
+  engineForce: n('Engine force (per wheel)', 1000, 12000, 100, 'N'),
+  reverseForce: n('Reverse force', 500, 8000, 100, 'N'),
+  brakeForce: n('Brakes', 5, 200, 1),
+  handbrakeForce: n('Handbrake', 0, 100, 1),
+  maxSteer: n('Steering lock, slow', 0.1, 1.2, 0.01, 'rad'),
+  minSteer: n('Steering lock, flat out', 0.02, 0.6, 0.01, 'rad'),
+  steerSpeed: n('Steering speed', 0.5, 15, 0.1, '/s'),
+  topSpeed: n('Engine cut-off speed', 10, 90, 1, 'm/s'),
+  dragCoefficient: n('Drag', 0, 6, 0.05),
+  downforce: n('Downforce', 0, 15, 0.1),
+  frontGrip: n('Front grip', 0.3, 5, 0.05),
+  rearGrip: n('Rear grip', 0.3, 5, 0.05),
+  handbrakeRearGrip: n('Rear grip, handbrake', 0.1, 4, 0.05),
+  suspensionRestLength: n('Suspension length', 0.1, 0.6, 0.01, 'm'),
+  suspensionStiffness: n('Suspension stiffness', 5, 100, 1),
+  suspensionCompression: n('Damping, compression', 0.2, 10, 0.1),
+  suspensionRelaxation: n('Damping, rebound', 0.2, 10, 0.1),
+  maxSuspensionTravel: n('Suspension travel', 0.05, 0.6, 0.01, 'm'),
+}, () => {
+  for (const car of ALL) car.applyTuning();
+});
+
 // Chassis collider, centred on the body's rigid body origin.
-const CHASSIS_HALF = { x: COROLLA.length / 2 - 0.05, y: 0.3, z: COROLLA.width / 2 - 0.04 };
+export const CHASSIS_HALF = { x: COROLLA.length / 2 - 0.05, y: 0.3, z: COROLLA.width / 2 - 0.04 };
 // Where the body mesh sits relative to the rigid body (its underside).
 const MESH_OFFSET_Y = -0.38;
 const WHEEL_CONNECTION_Y = -0.1;
@@ -96,26 +125,8 @@ export class Car {
         .setLinearDamping(0.05),
     );
 
-    // Low centre of mass and boosted roll inertia keep it on four wheels,
-    // which is most of what "arcade handling" means.
-    const m = TUNING.mass;
-    const lx = CHASSIS_HALF.x * 2;
-    const ly = CHASSIS_HALF.y * 2;
-    const lz = CHASSIS_HALF.z * 2;
     this.collider = world.createCollider(
-      RAPIER.ColliderDesc.cuboid(CHASSIS_HALF.x, CHASSIS_HALF.y, CHASSIS_HALF.z)
-        .setMassProperties(
-          m,
-          { x: 0, y: -0.25, z: 0 },
-          {
-            x: ((m / 12) * (ly * ly + lz * lz)) * 2.5,
-            y: (m / 12) * (lx * lx + lz * lz),
-            z: ((m / 12) * (lx * lx + ly * ly)) * 1.2,
-          },
-          { x: 0, y: 0, z: 0, w: 1 },
-        )
-        .setFriction(0.4)
-        .setRestitution(0.1),
+      RAPIER.ColliderDesc.cuboid(CHASSIS_HALF.x, CHASSIS_HALF.y, CHASSIS_HALF.z).setFriction(0.4).setRestitution(0.1),
       this.body,
     );
 
@@ -128,15 +139,11 @@ export class Car {
       { x: -halfBase, y: WHEEL_CONNECTION_Y, z: -halfTrack }, // rear left
       { x: -halfBase, y: WHEEL_CONNECTION_Y, z: halfTrack }, // rear right
     ];
-    for (const [i, p] of wheelPositions.entries()) {
+    for (const p of wheelPositions) {
       this.vehicle.addWheel(p, { x: 0, y: -1, z: 0 }, { x: 0, y: 0, z: 1 }, TUNING.suspensionRestLength, COROLLA.wheelRadius);
-      this.vehicle.setWheelSuspensionStiffness(i, TUNING.suspensionStiffness);
-      this.vehicle.setWheelSuspensionCompression(i, TUNING.suspensionCompression);
-      this.vehicle.setWheelSuspensionRelaxation(i, TUNING.suspensionRelaxation);
-      this.vehicle.setWheelMaxSuspensionTravel(i, TUNING.maxSuspensionTravel);
-      this.vehicle.setWheelMaxSuspensionForce(i, TUNING.maxSuspensionForce);
-      this.vehicle.setWheelFrictionSlip(i, i < 2 ? TUNING.frontGrip : TUNING.rearGrip);
     }
+    this.applyTuning();
+    ALL.add(this);
 
     const model = buildCorolla(paint);
     model.root.position.y = MESH_OFFSET_Y;
@@ -165,6 +172,35 @@ export class Car {
     this.syncPose();
     this.prevPos.copy(this.currPos);
     this.prevQuat.copy(this.currQuat);
+  }
+
+  /** Mass and suspension from TUNING: set when built, and again when the ? panel changes them. */
+  applyTuning(): void {
+    // Low centre of mass and boosted roll inertia keep it on four wheels,
+    // which is most of what "arcade handling" means.
+    const m = TUNING.mass;
+    const lx = CHASSIS_HALF.x * 2;
+    const ly = CHASSIS_HALF.y * 2;
+    const lz = CHASSIS_HALF.z * 2;
+    this.collider.setMassProperties(
+      m,
+      { x: 0, y: -0.25, z: 0 },
+      {
+        x: ((m / 12) * (ly * ly + lz * lz)) * 2.5,
+        y: (m / 12) * (lx * lx + lz * lz),
+        z: ((m / 12) * (lx * lx + ly * ly)) * 1.2,
+      },
+      { x: 0, y: 0, z: 0, w: 1 },
+    );
+    for (let i = 0; i < 4; i++) {
+      this.vehicle.setWheelSuspensionRestLength(i, TUNING.suspensionRestLength);
+      this.vehicle.setWheelSuspensionStiffness(i, TUNING.suspensionStiffness);
+      this.vehicle.setWheelSuspensionCompression(i, TUNING.suspensionCompression);
+      this.vehicle.setWheelSuspensionRelaxation(i, TUNING.suspensionRelaxation);
+      this.vehicle.setWheelMaxSuspensionTravel(i, TUNING.maxSuspensionTravel);
+      this.vehicle.setWheelMaxSuspensionForce(i, TUNING.maxSuspensionForce);
+      this.vehicle.setWheelFrictionSlip(i, i < 2 ? TUNING.frontGrip : TUNING.rearGrip);
+    }
   }
 
   /**

@@ -1,0 +1,102 @@
+// Dizzy (#53): a hard landing, a car hitting you on foot and a big crash
+// make you dizzy: slower, with stars over your head, then you come round
+// and are immune for a bit. Wiggling shakes it off sooner. And the ? panel
+// really turns it off.
+
+/** Off a 6 m drop where the player stands: lands at ~16 m/s, over the 13 m/s threshold. */
+const DROP = 6;
+
+export default {
+  name: 'dizzy',
+  core: false,
+  page: 'auckland',
+  async run(t) {
+    const { page, check, game, state, step, run, getIn, shot, dist } = t;
+    const fall = async () => {
+      await game('dropPlayer', DROP);
+      await run({ max: 120, every: 2, until: (s) => s.playerGrounded });
+      return game('dizzy');
+    };
+    const walk = async (ticks) => {
+      const a = (await state()).player;
+      const { s } = await run({ keys: ['KeyW'], max: ticks });
+      return dist(a, s.player);
+    };
+
+    // Fall, walk while dizzy, come round, walk again.
+    let d = await fall();
+    check(d.dizzy && d.cause === 'fall' && d.total >= 2 && d.total <= 5, `a ${DROP} m fall makes you dizzy (for ${d.total.toFixed(2)} s)`);
+    const p = await game('peds');
+    check(p.stars >= 1, `stars over your head (${p.stars} rings drawn)`);
+    await shot('20-dizzy-fall');
+    const dizzyWalk = await walk(60);
+    await run({ max: 600, until: (s) => !s.dizzy });
+    d = await game('dizzy');
+    check(!d.dizzy && d.immune, `recovers, then immune for a bit (${JSON.stringify({ dizzy: d.dizzy, immune: d.immune })})`);
+    const normalWalk = await walk(60);
+    check(dizzyWalk < normalWalk * 0.75, `slower while dizzy (${dizzyWalk.toFixed(2)} m in a second, ${normalWalk.toFixed(2)} m after)`);
+
+    // Immune: the same fall straight away does nothing.
+    d = await fall();
+    check(!d.dizzy && d.count === 1, `immunity holds: falling again straight after doesn't make you dizzy (${d.count} times so far)`);
+
+    // Once immunity's worn off, the same fall works again; wiggling the stick shakes it off sooner.
+    await run({ max: 240, until: () => false });
+    d = await fall();
+    check(d.dizzy && d.count === 2, 'dizzy again once immunity wears off');
+    const total = d.total;
+    let ticks = 0;
+    for (let i = 0; i < 40 && (await state()).dizzy; i++) {
+      const key = i % 2 ? 'KeyA' : 'KeyD';
+      await page.keyboard.down(key);
+      await step(4);
+      await page.keyboard.up(key);
+      ticks += 4;
+    }
+    d = await game('dizzy');
+    check(!d.dizzy && ticks / 60 < total * 0.7, `wiggling shakes it off sooner (${(ticks / 60).toFixed(2)} s of ${total.toFixed(2)}, ${d.wiggles} wiggles)`);
+
+    // A car (here a parked one, shoved at you) hitting you on foot: knocked up and dizzy.
+    await game('reset');
+    await step(10);
+    const y0 = (await state()).player[1];
+    let top = y0;
+    await game('hitPlayer', 1, 9);
+    await run({ max: 90, every: 1, sample: (s) => (top = Math.max(top, s.player[1])) });
+    d = await game('dizzy');
+    check(d.dizzy && d.cause === 'hit' && top - y0 > 0.4, `hit by a car at 9 m/s: knocked ${(top - y0).toFixed(2)} m up and dizzy (${d.cause})`);
+
+    // A big crash, driving: from the west kerb of lower Queen St across into the shopfronts on the east side.
+    await game('reset');
+    await getIn();
+    await game('teleportCar', 0, -190.3, 257.1, Math.atan2(-0.25, 0.97));
+    await step(30);
+    let kmh = 0;
+    await run({ keys: ['KeyW'], max: 300, every: 2, sample: (s) => (kmh = Math.max(kmh, s.speedKmh)), until: (s) => s.dizzy });
+    d = await game('dizzy');
+    check(d.dizzy && d.cause === 'crash', `a big crash (${kmh.toFixed(0)} km/h into a wall) makes the driver dizzy (${d.cause})`);
+    await shot('21-dizzy-crash');
+
+    // A knob: with the fall threshold past what a 6 m drop reaches, it's no longer a dizzy fall.
+    await game('reset');
+    await game('knob', 'dizzy.fallSpeed', 30);
+    d = await fall();
+    check(!d.dizzy, 'raising the fall threshold knob: the same fall is fine');
+
+    // Off on the ? panel, through the real buttons: nothing makes you dizzy.
+    await game('reset');
+    await page.click('#tweaks-btn');
+    const open = await state();
+    check(open.paused && (await page.locator('#tweaks-panel').isVisible()), 'the ? button opens the panel and pauses the game');
+    await page.click('[data-toggle="dizzy"]');
+    check((await game('knobs')).dizzy.on === false && (await page.locator('[data-toggle="dizzy"]').innerText()) === 'OFF', 'the panel switch turns dizzy off');
+    await shot('22-panel');
+    await page.click('#tweaks-panel [data-close]');
+    check(!(await state()).paused, 'closing the panel unpauses');
+    d = await fall();
+    await game('hitPlayer', 1, 9);
+    await run({ max: 60 });
+    d = await game('dizzy');
+    check(!d.dizzy && d.count === 0, 'with dizzy off, neither a fall nor a car hit makes you dizzy');
+  },
+};

@@ -163,7 +163,8 @@ canvas {
   display: none;
 }
 
-#app:has(#splash:not(.hidden)) .touch {
+#app:has(#splash:not(.hidden)) .touch,
+#app:has(#tweaks-panel:not(.hidden)) .touch {
   display: none;
 }
 
@@ -666,4 +667,229 @@ canvas {
   color: #ffe9a8;
   text-shadow: 0 1px 0 #000, 0 0 6px rgba(0, 0, 0, 0.8);
   white-space: nowrap;
+}
+
+/* The ? panel (src/tweaks-panel.ts): a sheet down the right, big targets for thumbs. */
+#tweaks-btn {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: calc(50% + 30px);
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.25);
+  border: 0;
+  border-radius: 999px;
+  min-width: 38px;
+  padding: 6px 12px;
+  font-size: 18px;
+  font-weight: 900;
+  cursor: pointer;
+  color: #fff;
+}
+
+#tweaks-btn.on {
+  background: rgba(199, 155, 255, 0.7);
+}
+
+#tweaks-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  touch-action: pan-y;
+  background: rgba(20, 14, 26, 0.94);
+  border-left: 2px solid #c79bff;
+  padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) 10px;
+  font-size: 15px;
+}
+
+#tweaks-panel button {
+  font: inherit;
+  font-weight: 700;
+  border-radius: 8px;
+  border: 1px solid #8a6bb3;
+  background: #2c2038;
+  color: #fff;
+  padding: 8px 12px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#tweaks-panel button:active {
+  background: #4a3566;
+}
+
+.tw-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #3d2d50;
+}
+
+.tw-head b {
+  font-size: 18px;
+}
+
+.tw-paused {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  opacity: 0.6;
+}
+
+.tw-count {
+  margin-left: auto;
+  font-size: 13px;
+  color: #ffd98a;
+}
+
+.tw-out {
+  margin-top: 8px;
+  height: 120px;
+  background: #110c16;
+  color: #fff;
+  border: 1px solid #8a6bb3;
+  border-radius: 8px;
+  font: 12px ui-monospace, monospace;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.tw-body {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-top: 4px;
+}
+
+.tw-section {
+  border-bottom: 1px solid #3d2d50;
+  padding: 4px 0 10px;
+}
+
+.tw-section summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 800;
+  font-size: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tw-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.tw-section summary::before {
+  content: '▸';
+  width: 18px;
+  opacity: 0.7;
+}
+
+.tw-section[open] summary::before {
+  content: '▾';
+}
+
+.tw-section .tw-switch {
+  margin-left: auto;
+  min-width: 64px;
+  background: #3d7a3a !important;
+  border-color: #6fc46a !important;
+}
+
+.tw-section.off .tw-switch {
+  background: #4a2030 !important;
+  border-color: #a05070 !important;
+}
+
+.tw-section.off .tw-knob {
+  opacity: 0.45;
+}
+
+.tw-knob {
+  padding: 6px 0 2px;
+}
+
+.tw-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+.tw-label output {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tw-knob.changed .tw-label output {
+  color: #ffd98a;
+  font-weight: 800;
+}
+
+.tw-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#tweaks-panel .tw-step {
+  width: 40px;
+  height: 36px;
+  padding: 0;
+  font-size: 20px;
+  flex: none;
+}
+
+.tw-control input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  margin: 0;
+  accent-color: #c79bff;
+  touch-action: pan-y;
+}
+
+#tweaks-panel .tw-reset-section {
+  margin-top: 8px;
+  font-size: 13px;
+  padding: 6px 10px;
+  opacity: 0.8;
+}
+
+/* Speech bubbles over pedestrians (src/bubbles.ts). */
+.bubbles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.bubble {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: #fff;
+  color: #111;
+  font-weight: 900;
+  font-size: 15px;
+  padding: 4px 9px;
+  border-radius: 12px;
+  border: 2px solid #111;
+  white-space: nowrap;
+}
+
+.bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  margin-left: -6px;
+  border: 6px solid transparent;
+  border-top-color: #111;
 }
