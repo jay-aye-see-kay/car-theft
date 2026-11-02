@@ -25,6 +25,8 @@ import { knob, mechanic } from './tweaks.ts';
 /** Cars in each pool: the most the knobs go up to. */
 export const TRAFFIC_POOL = 24;
 export const PARKED_POOL = 32;
+/** Police cars (src/cops/): they drive about like traffic until the cops hold one for a chase. */
+export const PATROL_POOL = 6;
 
 export const TRAFFIC = mechanic('traffic', 'Traffic', true, {
   count: knob(12, 'How many', 0, TRAFFIC_POOL, 1),
@@ -51,6 +53,14 @@ const SPOT_EVERY = 8;
 const SPOT_CLEAR = 9;
 /** Gap from the kerb to the car's side, m. */
 const KERB_GAP = 0.3;
+/**
+ * Half up on the kerb: the car's centre this far past the kerb, onto the
+ * footpath, m. Where the lane by the kerb is one traffic drives in (one lane
+ * that way, or the right-hand side of a one-way street), a car parked in the
+ * road would block it; up here it leaves the lane clear (and the footpath
+ * walkers keep further out, src/peds.ts).
+ */
+const ON_KERB = 0.5;
 const MAX_GRADE = 0.2;
 /** Chassis centre above the ground at rest, m (as in tools/citygen/parking.ts). */
 const RIDE_HEIGHT = 0.68;
@@ -65,11 +75,14 @@ const PASS_SHIFT = 2.3;
 /** Wanting to go but not getting anywhere for this long: give up (left where it is, taken away later), s. */
 const GIVE_UP = 8;
 
+/** Police cars are white (with a blue band and a light bar: src/car-fleet.ts). */
+const POLICE_PAINT = 0xf4f4f0;
 /** Period colours for the town's cars. */
 const PAINTS = [0xe9e9e4, 0x9a9da1, 0x1b1b1d, 0x2b4f7e, 0x8c1d1d, 0x5d7a4a, 0xc9c2b4, 0x3a6ea5, 0xd8c25a, 0x6e1a24, 0x2f6d6a, 0xb7b9bb, 0x1d2c55, 0xa9adb3, 0x7b2e2a, 0xc8b48a];
 
-type Kind = 'idle' | 'parked' | 'driving' | 'loose';
-type Pool = 'traffic' | 'parked';
+/** `held`: the cops have it (src/cops/cops.ts drives it; it's left alone here). */
+type Kind = 'idle' | 'parked' | 'driving' | 'loose' | 'held';
+type Pool = 'traffic' | 'parked' | 'patrol';
 
 interface Leg {
   edge: RoadEdge;
@@ -104,6 +117,8 @@ interface Spot {
   z: number;
   heading: number;
   pitch: number;
+  /** Half up on the kerb (so it must be clear of buildings and street furniture). */
+  kerb: boolean;
 }
 
 export interface TownWorld {
@@ -112,6 +127,8 @@ export interface TownWorld {
   heightAt(x: number, z: number): number;
   /** The ground here has collision. */
   hasGround(x: number, z: number): boolean;
+  /** Something solid (a wall, a pole) where a car would stand here, facing `heading`? */
+  blocked?(x: number, y: number, z: number, heading: number): boolean;
 }
 
 /** What the town's drivers keep clear of: every car, and you on foot. */
@@ -133,14 +150,16 @@ export class Town {
   private near: Spot[] = [];
   private nearAt = { x: Infinity, z: Infinity, r: 0 };
   private rand = rng(7);
+  /** Police cars to keep driving about (set by the cops each frame; -1 when they're off, and all go). */
+  patrols = -1;
   /** ?debug counts. */
   stats = { spawned: { traffic: 0, parked: 0 }, removed: 0, carjacked: 0, gaveUp: 0, why: [] as string[] };
 
-  /** `cars`: TRAFFIC_POOL for traffic, then PARKED_POOL to park. */
+  /** `cars`: TRAFFIC_POOL for traffic, then PARKED_POOL to park, then PATROL_POOL police cars. */
   constructor(w: TownWorld, cars: readonly Car[]) {
     this.w = w;
     this.list = cars.map((car, i) => ({
-      car, pool: i < TRAFFIC_POOL ? 'traffic' : 'parked', kind: 'idle', legs: [], s: 0, shift: 0, stuck: 0, waited: 0, pace: 1,
+      car, pool: i < TRAFFIC_POOL ? 'traffic' : i < TRAFFIC_POOL + PARKED_POOL ? 'parked' : 'patrol', kind: 'idle', legs: [], s: 0, shift: 0, stuck: 0, waited: 0, pace: 1,
       controls: { throttle: 0, brake: 0, steer: 0, handbrake: false }, blocked: '',
     }));
     for (const t of this.list) this.byCar.set(t.car, t);
@@ -176,6 +195,83 @@ export class Town {
     return this.byCar.get(car)?.kind === 'driving';
   }
 
+  /** One of the police cars? */
+  isPatrol(car: Car): boolean {
+    return this.byCar.get(car)?.pool === 'patrol';
+  }
+
+  /** The police cars out and driving about (not held for a chase). */
+  patrolling(): Car[] {
+    return this.list.filter((t) => t.pool === 'patrol' && t.kind === 'driving').map((t) => t.car);
+  }
+
+  /** The cops take this one over (from patrolling, or just put out): it's theirs to drive. */
+  hold(car: Car): void {
+    const t = this.byCar.get(car);
+    if (t && t.kind !== 'idle') t.kind = 'held';
+  }
+
+  /**
+   * Back to driving about from wherever it is (a chase over): into the
+   * nearest lane going the way it faces, or left be if it's off the roads.
+   */
+  release(car: Car): void {
+    const t = this.byCar.get(car);
+    if (!t || t.kind !== 'held') return;
+    const p = car.body.translation();
+    const f = _fwd.set(1, 0, 0).applyQuaternion(rotation(car));
+    const heading = Math.atan2(-f.z, f.x);
+    const n = this.w.roads.nearest(p.x, p.z, { within: 12, main: true });
+    if (!n || n.edge.restricted || car.isUpsideDown()) {
+      t.kind = 'loose';
+      return;
+    }
+    const along = Math.cos(heading - this.w.roads.pointAt(n.edge, n.s).heading) > 0;
+    let dir: Dir = along ? 1 : -1;
+    if ((dir > 0 ? n.edge.fw : n.edge.bw) === 0) dir = (-dir) as Dir;
+    t.kind = 'driving';
+    t.legs = [{ edge: n.edge, dir, lane: outerLane(dir > 0 ? n.edge.fw : n.edge.bw) }];
+    t.s = dir > 0 ? n.s : n.edge.length - n.s;
+    t.shift = t.stuck = t.waited = 0;
+    this.plan(t);
+  }
+
+  /** ?debug: a police car on the lane nearest (x, z), facing about `heading`, held for the cops. */
+  patrolAt(x: number, z: number, heading: number): Car | null {
+    const t = this.free('patrol');
+    const n = this.w.roads.nearest(x, z, { within: 40, open: false });
+    if (!t || !n) return null;
+    const along = Math.cos(heading - this.w.roads.pointAt(n.edge, n.s).heading) > 0;
+    let dir: Dir = along ? 1 : -1;
+    if ((dir > 0 ? n.edge.fw : n.edge.bw) === 0) dir = (-dir) as Dir;
+    const pose = this.w.roads.lane(n.edge, dir, outerLane(dir > 0 ? n.edge.fw : n.edge.bw), dir > 0 ? n.s : n.edge.length - n.s);
+    const ground = this.w.heightAt(pose.x, pose.z);
+    if (Number.isNaN(ground)) return null;
+    t.kind = 'held';
+    t.legs = [];
+    t.car.paint.setHex(POLICE_PAINT);
+    t.car.place(new THREE.Vector3(pose.x, ground + RIDE_HEIGHT + 0.05, pose.z), pose.heading);
+    return t.car;
+  }
+
+  /** Taken away (a chase car the cops are done with, out of sight). */
+  dismiss(car: Car): void {
+    const t = this.byCar.get(car);
+    if (t) this.remove(t);
+  }
+
+  /**
+   * A police car put out on a lane between `min` and `max` from the focus,
+   * out of view, already held for the cops (they'll drive it). Null if
+   * there's none free or nowhere suitable this time.
+   */
+  spawnPatrol(focus: { x: number; z: number }, yaw: number, obstacles: Obstacles, min: number, max: number): Car | null {
+    const t = this.spawnOn('patrol', focus, yaw, obstacles, min, max);
+    if (!t) return null;
+    t.kind = 'held';
+    return t.car;
+  }
+
   /**
    * Someone's got in (you, or someone in the room): it's theirs now, and
    * stays where they leave it until it's out of sight. Returns where its
@@ -202,20 +298,22 @@ export class Town {
    */
   step(dt: number, focus: { x: number; z: number }, yaw: number, obstacles: Obstacles, claimed: (car: Car) => boolean): void {
     for (const t of this.list) {
-      if (t.kind === 'idle') continue;
+      if (t.kind === 'idle' || t.kind === 'held') continue;
       if (claimed(t.car)) {
         t.kind = 'loose';
         continue;
       }
       const p = t.car.body.translation();
       const d = Math.hypot(p.x - focus.x, p.z - focus.z);
-      const radius = t.pool === 'traffic' ? TRAFFIC.spawnRadius : PARKED.spawnRadius;
-      const off = (t.pool === 'traffic' ? !TRAFFIC.on : !PARKED.on) && t.kind !== 'loose';
+      const radius = t.pool === 'parked' ? PARKED.spawnRadius : TRAFFIC.spawnRadius;
+      const off = (t.pool === 'traffic' ? !TRAFFIC.on : t.pool === 'parked' ? !PARKED.on : this.patrols < 0) && t.kind !== 'loose';
       if (off || d > FORGET || (d > radius * DESPAWN && !inView(p.x - focus.x, p.z - focus.z, yaw))) this.remove(t);
     }
     this.trim('traffic', TRAFFIC.on ? TRAFFIC.count : 0, focus, yaw);
     this.trim('parked', PARKED.on ? PARKED.count : 0, focus, yaw);
-    if (TRAFFIC.on) this.spawnTraffic(focus, yaw, obstacles);
+    this.trim('patrol', Math.max(0, this.patrols), focus, yaw);
+    if (TRAFFIC.on) this.spawnTraffic('traffic', TRAFFIC.count, focus, yaw, obstacles);
+    if (this.patrols > 0) this.spawnTraffic('patrol', this.patrols, focus, yaw, obstacles);
     if (PARKED.on) this.spawnParked(focus, yaw, obstacles);
     for (const t of this.list) if (t.kind === 'driving') this.drive(t, dt, obstacles);
   }
@@ -255,7 +353,7 @@ export class Town {
 
   /** Over the count (it went down): the furthest out of view go first. */
   private trim(pool: Pool, count: number, focus: { x: number; z: number }, yaw: number): void {
-    const live = this.list.filter((t) => t.pool === pool && t.kind !== 'idle' && t.kind !== 'loose');
+    const live = this.list.filter((t) => t.pool === pool && t.kind !== 'idle' && t.kind !== 'loose' && t.kind !== 'held');
     while (live.length > count) {
       let worst = -1;
       let worstD = -1;
@@ -267,6 +365,8 @@ export class Town {
           worstD = d;
         }
       }
+      // Police cars a chase just let go drive off: only out of sight are they taken away.
+      if (pool === 'patrol' && worstD < 1000) break;
       this.remove(live[worst]);
       live.splice(worst, 1);
     }
@@ -286,22 +386,36 @@ export class Town {
     return !obstacles.walker || Math.hypot(obstacles.walker.x - x, obstacles.walker.z - z) > r;
   }
 
-  private spawnTraffic(focus: { x: number; z: number }, yaw: number, obstacles: Obstacles): void {
-    const live = this.list.filter((t) => t.pool === 'traffic' && (t.kind === 'driving' || t.kind === 'parked')).length;
-    if (live >= TRAFFIC.count) return;
-    const t = this.free('traffic');
-    if (!t) return;
-    const r = TRAFFIC.spawnRadius;
+  private spawnTraffic(pool: Pool, count: number, focus: { x: number; z: number }, yaw: number, obstacles: Obstacles): void {
+    const live = this.list.filter((t) => t.pool === pool && (t.kind === 'driving' || t.kind === 'parked')).length;
+    if (live >= count) return;
+    this.spawnOn(pool, focus, yaw, obstacles, MIN_SPAWN.traffic, TRAFFIC.spawnRadius);
+  }
+
+  /** One car from `pool` out on a lane between `min` and `r` from the focus (out of view inside VIEW_FAR), driving. */
+  private spawnOn(pool: Pool, focus: { x: number; z: number }, yaw: number, obstacles: Obstacles, min: number, r: number): TownCar | null {
+    const t = this.free(pool);
+    if (!t) return null;
     for (let attempt = 0; attempt < 4; attempt++) {
       const at = this.w.roads.randomLane(this.rand, { near: focus, within: r });
       if (!at || at.edge.bridge || at.edge.roundabout) continue;
+      if (pool === 'patrol') {
+        // A police car comes your way where the road allows (no U-turn to start a chase with).
+        const c = this.w.roads.pointAt(at.edge, at.dir > 0 ? at.s : at.edge.length - at.s);
+        const h = at.dir > 0 ? c.heading : c.heading + Math.PI;
+        const towards = Math.cos(h) * (focus.x - c.x) - Math.sin(h) * (focus.z - c.z) > 0;
+        if (!towards && (at.dir > 0 ? at.edge.bw : at.edge.fw) > 0) {
+          at.dir = (-at.dir) as Dir;
+          at.s = at.edge.length - at.s;
+        }
+      }
       const lanes = at.dir > 0 ? at.edge.fw : at.edge.bw;
       const lane = outerLane(lanes);
       const pose = this.w.roads.lane(at.edge, at.dir, lane, at.s);
       const dx = pose.x - focus.x;
       const dz = pose.z - focus.z;
       const d = Math.hypot(dx, dz);
-      if (d < MIN_SPAWN.traffic || d > r || (inView(dx, dz, yaw) && d < VIEW_FAR)) continue;
+      if (d < min || d > r || (inView(dx, dz, yaw) && d < VIEW_FAR)) continue;
       if (!this.w.hasGround(pose.x, pose.z) || !this.clear(pose.x, pose.z, 12, obstacles)) continue;
       const ground = this.w.heightAt(pose.x, pose.z);
       if (Number.isNaN(ground)) continue;
@@ -312,15 +426,16 @@ export class Town {
       t.stuck = 0;
       t.waited = 0;
       t.pace = 0.85 + this.rand() * 0.3;
-      t.car.paint.setHex(PAINTS[Math.floor(this.rand() * PAINTS.length)]);
+      t.car.paint.setHex(pool === 'patrol' ? POLICE_PAINT : PAINTS[Math.floor(this.rand() * PAINTS.length)]);
       t.car.place(new THREE.Vector3(pose.x, ground + RIDE_HEIGHT + 0.05, pose.z), pose.heading);
       // Already going: cars don't pull away from a standstill out of nowhere.
       const v = this.speedFor(t, at.edge) * 0.8;
       t.car.body.setLinvel({ x: Math.cos(pose.heading) * v, y: 0, z: -Math.sin(pose.heading) * v }, true);
       this.plan(t);
       this.stats.spawned.traffic++;
-      return;
+      return t;
     }
+    return null;
   }
 
   private spawnParked(focus: { x: number; z: number }, yaw: number, obstacles: Obstacles): void {
@@ -343,6 +458,8 @@ export class Town {
       if (!this.w.hasGround(s.x, s.z) || !this.clear(s.x, s.z, 6, obstacles)) continue;
       const ground = this.w.heightAt(s.x, s.z);
       if (Number.isNaN(ground)) continue;
+      // Up on the footpath, where a shopfront or a lamp post may already be.
+      if (s.kerb && this.w.blocked?.(s.x, ground, s.z, s.heading)) continue;
       t.kind = 'parked';
       t.legs = [];
       t.car.paint.setHex(PAINTS[Math.floor(this.rand() * PAINTS.length)]);
@@ -361,14 +478,16 @@ export class Town {
     const roads = this.w.roads;
     for (const e of roads.edges) {
       if (!STREETS.has(e.highway) || e.bridge || e.roundabout || e.restricted || !e.main || e.length < 2 * SPOT_CLEAR + 4) continue;
-      const out = e.width / 2 - KERB_GAP - COROLLA.width / 2;
       // Room for a parked car and someone driving past it.
-      if (e.width < (e.bw === 0 ? 6 : 6.5)) continue;
+      if (e.width < (e.bw === 0 ? 6 : 7)) continue;
       const sides: { dir: Dir; side: number }[] = [];
       if (e.fw) sides.push({ dir: 1, side: 1 });
       if (e.bw) sides.push({ dir: -1, side: 1 });
-      if (!e.bw && e.width >= 8) sides.push({ dir: 1, side: -1 });
+      if (!e.bw && e.width >= 7) sides.push({ dir: 1, side: -1 });
       for (const { dir, side } of sides) {
+        // Traffic keeps to lane 1 where there are two or more (outerLane), so lane 0 is free to park in.
+        const kerb = side < 0 || (dir > 0 ? e.fw : e.bw) < 2;
+        const out = kerb ? e.width / 2 + ON_KERB : e.width / 2 - KERB_GAP - COROLLA.width / 2;
         const from = (dir > 0 ? e.stopA : e.stopB) + SPOT_CLEAR;
         const to = e.length - (dir > 0 ? e.stopB : e.stopA) - SPOT_CLEAR;
         for (let s = from; s <= to; s += SPOT_EVERY) {
@@ -379,7 +498,7 @@ export class Town {
           const pitch = Math.atan2(ahead.y - back.y, 3);
           if (Math.abs(Math.tan(pitch)) > MAX_GRADE) continue;
           // Left of the way it faces is (-sin h, -cos h), as in RoadGraph.lane().
-          this.spots.push({ x: c.x - Math.sin(h) * out * side, y: c.y, z: c.z - Math.cos(h) * out * side, heading: Math.atan2(Math.sin(h), Math.cos(h)), pitch });
+          this.spots.push({ x: c.x - Math.sin(h) * out * side, y: c.y, z: c.z - Math.cos(h) * out * side, heading: Math.atan2(Math.sin(h), Math.cos(h)), pitch, kerb });
         }
       }
     }
@@ -584,6 +703,27 @@ export class Town {
     const p = this.target(t, along);
     return (p.x - pos.x) * Math.sin(heading) + (p.z - pos.z) * Math.cos(heading);
   }
+}
+
+/**
+ * The map's own parked cars (parking.json) were put at the kerb in the road;
+ * where that blocks the lane traffic drives in, they go half up on the kerb
+ * like the town's. Returns where to put one, or null to leave it be.
+ */
+export function onKerb(roads: RoadGraph, x: number, z: number, heading: number): { x: number; z: number } | null {
+  const n = roads.nearest(x, z, { within: 15, open: false });
+  if (!n || !STREETS.has(n.edge.highway) || n.dist < 0.5) return null;
+  const e = n.edge;
+  const p = roads.pointAt(e, n.s);
+  // Facing the way the edge runs (dir 1) or against it, and on its left or right.
+  const along = Math.cos(heading - p.heading) > 0;
+  const dir: Dir = along ? 1 : -1;
+  const leftOfTravel = n.left === along;
+  const lanes = dir > 0 ? e.fw : e.bw;
+  const kerb = !leftOfTravel || (lanes < 2 && lanes > 0) || e.fw + e.bw < 2;
+  if (!kerb) return null;
+  const out = e.width / 2 + ON_KERB;
+  return { x: n.x + ((x - n.x) / n.dist) * out, z: n.z + ((z - n.z) / n.dist) * out };
 }
 
 /** The lane to keep to: the outside one (lane 1) on a multi-lane road, clear of parked cars. */

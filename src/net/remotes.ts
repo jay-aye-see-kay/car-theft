@@ -46,6 +46,8 @@ interface Remote {
   /** As drawn: in a car, and how fast, km/h (for missions). */
   driving: boolean;
   speedKmh: number;
+  /** The cops after them, as of the pose we're showing. */
+  cops: Pick<Pose, 'w' | 'k' | 'u'>;
 }
 
 const _q = new THREE.Quaternion();
@@ -86,7 +88,7 @@ export class Remotes {
     this.tags.appendChild(tag);
     this.remotes.set(id, {
       id, name, poses: [], seq: -1, gaps: [], offset: 0, puppet, car: -1,
-      controls: { steer: 0, throttle: 0, brake: 0, handbrake: false }, tag, at: new THREE.Vector3(), seen: false, driving: false, speedKmh: 0,
+      controls: { steer: 0, throttle: 0, brake: 0, handbrake: false }, tag, at: new THREE.Vector3(), seen: false, driving: false, speedKmh: 0, cops: {},
     });
   }
 
@@ -154,6 +156,7 @@ export class Remotes {
       const [x, y, z] = pose.p;
       r.at.set(x, y, z);
       r.driving = pose.c >= 0;
+      r.cops = { w: pose.w, k: pose.k, u: pose.u };
       r.speedKmh = Math.hypot(...pose.v) * 3.6;
       if (r.car >= 0 && pose.q) {
         const body = this.cars[r.car].body;
@@ -196,7 +199,9 @@ export class Remotes {
       r.tag.classList.toggle('hidden', !show);
       if (!show) continue;
       _v.project(camera);
-      const text = d > 60 ? `${r.name} · ${Math.round(d / 10) * 10} m` : r.name;
+      // Wanted: a siren on their name.
+      const name = r.cops.w ? `🚨 ${r.name}` : r.name;
+      const text = d > 60 ? `${name} · ${Math.round(d / 10) * 10} m` : name;
       if (r.tag.textContent !== text) r.tag.textContent = text;
       r.tag.style.transform = `translate(${(((_v.x + 1) / 2) * w).toFixed(0)}px, ${(((1 - _v.y) / 2) * h).toFixed(0)}px) translate(-50%, -100%)`;
     }
@@ -209,6 +214,11 @@ export class Remotes {
       if (r.seen) out.push({ id: r.id, name: r.name, x: r.at.x, y: r.at.y, z: r.at.z, driving: r.driving, speedKmh: r.speedKmh });
     }
     return out;
+  }
+
+  /** The cops after each of the others (theirs to run; we only draw them). */
+  cops(): { id: number; w: number; k: NonNullable<Pose['k']>; u: NonNullable<Pose['u']> }[] {
+    return [...this.remotes.values()].filter((r) => r.seen).map((r) => ({ id: r.id, w: r.cops.w ?? 0, k: r.cops.k ?? [], u: r.cops.u ?? [] }));
   }
 
   /** For ?debug: where each remote player is, and which car they're in. */
@@ -273,6 +283,20 @@ function lerpPose(a: Pose, b: Pose, k: number): Pose {
   // In or out of a car between the two: stay with the earlier until the later.
   if (a.c !== b.c) return k < 1 ? a : b;
   const out: Pose = { ...a, p };
+  // Their cops' cars, between the two poses too (same cars in the same order).
+  if (a.k && b.k && a.k.length === b.k.length) {
+    out.k = a.k.map((ca, i) => {
+      const cb = b.k![i];
+      _q.set(ca[3], ca[4], ca[5], ca[6]).slerp(_qb.set(cb[3], cb[4], cb[5], cb[6]), k);
+      return [ca[0] + (cb[0] - ca[0]) * k, ca[1] + (cb[1] - ca[1]) * k, ca[2] + (cb[2] - ca[2]) * k, _q.x, _q.y, _q.z, _q.w, cb[7]];
+    });
+  }
+  if (a.u && b.u && a.u.length === b.u.length) {
+    out.u = a.u.map((oa, i) => {
+      const ob = b.u![i];
+      return [oa[0] + (ob[0] - oa[0]) * k, oa[1] + (ob[1] - oa[1]) * k, oa[2] + (ob[2] - oa[2]) * k, oa[3] + Math.atan2(Math.sin(ob[3] - oa[3]), Math.cos(ob[3] - oa[3])) * k, ob[4], ob[5]];
+    });
+  }
   if (a.q && b.q) {
     _q.set(...a.q).slerp(_qb.set(...b.q), k);
     out.q = [_q.x, _q.y, _q.z, _q.w];

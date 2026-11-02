@@ -13,9 +13,14 @@ const MAX = 48;
 const DRAW = 160;
 /** Lying on their back: the torso is this thick, so lift it clear of the ground, m. */
 const LIE_LIFT = 0.14;
+/** On a bicycle: feet up on the pedals, m. */
+const RIDE_LIFT = 0.3;
+/** Officers' tackles: flat out forward this far, rad. */
+const DIVE = 1.25;
 
 // Palettes the shader picks from (indices in peds.ts's Look).
-const HAIR = [0x16100b, 0x3b2414, 0x6b4423, 0xc9a35a, 0x9a9a98, 0x9c4a1e];
+// The last "hair" is a police cap (peds.ts COP_HAT).
+const HAIR = [0x16100b, 0x3b2414, 0x6b4423, 0xc9a35a, 0x9a9a98, 0x9c4a1e, 0x161c30];
 const SHOES = [0x1c1c1f, 0xeeeeea, 0x2a6fd6, 0x6b4a2e];
 
 const glslColours = (name: string, list: number[]) =>
@@ -166,8 +171,13 @@ export class PedsMesh {
         const f = Math.min(1, p.t / 0.6);
         _q.copy(facing).multiply(_q3.identity().slerp(LYING, 1 - f * f));
         lift = LIE_LIFT * (1 - f);
+      } else if (p.state === 'tackle') {
+        // Diving at you: pitched forward about the hips.
+        _q.copy(facing).multiply(_q3.setFromAxisAngle(_side, -DIVE * Math.min(1, p.t / 0.22)));
+        lift = 0.25 * Math.min(1, p.t / 0.22);
       } else {
         _q.copy(facing);
+        if (p.bike && (p.state === 'walk' || p.state === 'cop' || p.state === 'wait')) lift = RIDE_LIFT;
         if (p.dazed > 0 || p.state === 'stumble') {
           // Wobbling: the same drunken lean as the player.
           const w = p.state === 'stumble' ? 1 : Math.min(1, p.dazed);
@@ -211,7 +221,22 @@ export class PedsMesh {
   /** Leg swing, left and right arm, torso lean (rad) for what they're doing. */
   private limbs(p: Ped): [number, number, number, number] {
     const t = this.time + p.id * 0.37;
+    if (p.bike && (p.state === 'walk' || p.state === 'cop' || p.state === 'wait')) {
+      // Pedalling, leaning on the handlebars.
+      return [Math.sin(p.phase) * 0.55, 0.95, 0.95, -0.3];
+    }
     switch (p.state) {
+      case 'cop': {
+        // Running after you (or standing, when they've stopped).
+        const run = Math.min(1, Math.hypot(p.vx, p.vz) / 5);
+        const sw = Math.sin(p.phase) * (0.25 + 0.75 * run);
+        return [sw, -sw * 0.9, sw * 0.9, -0.3 * run];
+      }
+      case 'tackle':
+        return [-0.5, 2.6, 2.6, 0];
+      case 'scold':
+        // Wagging a finger at you.
+        return [0, -0.1, 1.5 + Math.sin(t * 14) * 0.25, 0.05];
       case 'walk':
       case 'chase': {
         const amp = p.state === 'chase' ? 0.9 : 0.45;

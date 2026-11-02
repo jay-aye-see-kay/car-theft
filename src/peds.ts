@@ -29,8 +29,8 @@ export const HITS = mechanic('hits', 'Bouncy hits', true, {
   shrug: knob(0.5, 'Reaction: dust off, carry on', 0, 1, 0.05),
 });
 
-/** Footpaths are this far out from the kerb (the carriageway's edge), m. */
-const KERB_GAP = 1.7;
+/** Footpaths are this far out from the kerb (the carriageway's edge), m: clear of cars parked half up on it (src/traffic.ts). */
+const KERB_GAP = 2;
 /** Never spawn closer than this, m. */
 const MIN_SPAWN = 22;
 /** In the camera's view: within this angle of where it looks (wider than half the FOV). */
@@ -55,7 +55,8 @@ const HIT_COOLDOWN = 0.8;
 const NO_WALK = new Set(['motorway', 'motorway_link', 'trunk_link']);
 const WALKABLE = new Set(['footpath', 'paving', 'path', 'urban']);
 
-export type PedState = 'walk' | 'wait' | 'fly' | 'down' | 'getup' | 'react' | 'chase' | 'stumble';
+/** 'cop', 'tackle' and 'scold' are police officers' (src/cops/cops.ts moves them; here they only keep to the ground). */
+export type PedState = 'walk' | 'wait' | 'fly' | 'down' | 'getup' | 'react' | 'chase' | 'stumble' | 'cop' | 'tackle' | 'scold';
 export type Reaction = 'oi' | 'chase' | 'shrug';
 
 export interface Look {
@@ -111,6 +112,11 @@ export interface Ped {
   saysFor: number;
   /** A test ped (?debug spawnPed): stands still, never despawns. */
   pinned: boolean;
+  /** A police officer (src/cops/): kept by the cops, not culled or counted here. */
+  role: 'ped' | 'cop';
+  kept: boolean;
+  /** Riding a bicycle (officers): quicker, and knocked off it by a car. */
+  bike: boolean;
   hitBy: number;
   hitAt: number;
   bounces: number;
@@ -119,7 +125,8 @@ export interface Ped {
 }
 
 export type PedEvent =
-  | { kind: 'hit'; x: number; y: number; z: number; speed: number; byPlayer: boolean }
+  | { kind: 'hit'; x: number; y: number; z: number; speed: number; byPlayer: boolean; cop: boolean }
+  | { kind: 'unseated'; x: number; y: number; z: number; heading: number }
   | { kind: 'bounce'; x: number; y: number; z: number; strength: number }
   | { kind: 'bark'; x: number; y: number; z: number; pitch: number };
 
@@ -206,6 +213,16 @@ const SAY: Record<Reaction, string[]> = {
   shrug: ['…sweet as.', 'All good.', 'She\'ll be right.'],
 };
 const STUMBLE_SAY = ['Oof!', 'Watch it!', 'Steady on!', 'Oi!'];
+const COP_HIT_SAY = ['Right. That\'s assault, that is.', 'Oi! I\'m the police!', 'You\'ll keep, mate.', 'Not the uniform!'];
+
+/** Police blue shirt, navy trousers and cap (the cap is the "hair": HAIR[6] in peds-mesh.ts). */
+export const COP_HAT = 6;
+export function copLook(r: () => number): Look {
+  return {
+    skin: new THREE.Color(pick(r, SKINS)), top: new THREE.Color(0x9cc0e2), bottom: new THREE.Color(0x1b2238),
+    hair: COP_HAT, shoes: 0, trousers: true, sleeves: true, height: 1 + r() * 0.08, build: 1 + r() * 0.12,
+  };
+}
 
 const _q = new THREE.Quaternion();
 const _axis = new THREE.Vector3();
@@ -226,8 +243,7 @@ export class Peds {
   private readonly at = new Map<number, RoadEdge[]>();
   private readonly walkable: RoadEdge[];
   private readonly boxes: Float32Array;
-  private near: RoadEdge[] = [];
-  private nearAt = { x: Infinity, z: Infinity, r: 0 };
+  private readonly nearBy = new Map<number, { x: number; z: number; list: RoadEdge[]; total: number }>();
   private rand = rng(1);
   private nextId = 1;
   private clock = 0;
@@ -264,7 +280,7 @@ export class Peds {
     this.rand = rng(seed);
     this.nextId = 1;
     this.clock = 0;
-    this.nearAt = { x: Infinity, z: Infinity, r: 0 };
+    this.nearBy.clear();
     this.stats = { spawned: 0, hits: 0, bumps: 0, stumbles: 0, gotUp: 0 };
   }
 
@@ -277,11 +293,12 @@ export class Peds {
     this.clock += dt;
     let stumble: { x: number; z: number } | null = null;
     if (!PEDS.on) {
-      this.list.length = 0;
-      return { stumble };
+      // Nobody about, but the police (src/cops/) keep theirs.
+      for (let i = this.list.length - 1; i >= 0; i--) if (!this.list[i].kept) this.list.splice(i, 1);
+    } else {
+      this.cull(focus);
+      this.spawn(focus, yaw);
     }
-    this.cull(focus);
-    this.spawn(focus, yaw);
 
     for (const p of this.list) {
       p.px = p.x;
@@ -380,7 +397,12 @@ export class Peds {
     p.peak = 0;
     p.y += 0.05;
     this.stats.hits++;
-    this.events.push({ kind: 'hit', x: p.x, y: p.y, z: p.z, speed: v.speed, byPlayer: c.player });
+    this.events.push({ kind: 'hit', x: p.x, y: p.y, z: p.z, speed: v.speed, byPlayer: c.player, cop: p.role === 'cop' });
+    if (p.bike) {
+      // Off the bike, which stays where it fell.
+      p.bike = false;
+      this.events.push({ kind: 'unseated', x: p.x, y: p.y, z: p.z, heading: p.heading });
+    }
   }
 
   private stumble(p: Ped, vx: number, vz: number): void {
@@ -486,6 +508,11 @@ export class Peds {
       case 'wait':
         if (!p.pinned && p.t > 2.5) this.setState(p, 'walk');
         break;
+      case 'cop':
+      case 'tackle':
+      case 'scold':
+        // Moved by the cops; the ground below is all that's done here.
+        break;
       case 'walk':
         this.walk(p, dt);
         break;
@@ -494,7 +521,7 @@ export class Peds {
   }
 
   private walk(p: Ped, dt: number): void {
-    const pace = p.pace * PEDS.walkSpeed * (p.dazed > 0 ? 0.55 : 1);
+    const pace = p.pace * PEDS.walkSpeed * (p.dazed > 0 ? 0.55 : 1) * (p.bike ? 2.6 : 1);
     p.s += pace * dt;
     if (p.s >= p.edge.length) {
       if (!this.turn(p)) return;
@@ -560,6 +587,14 @@ export class Peds {
   }
 
   private react(p: Ped, player: { x: number; z: number } | null): void {
+    if (p.role === 'cop') {
+      // Officers don't chase off in a huff: they tell you off, then get back to it (the cops take over again).
+      p.reaction = 'oi';
+      this.setState(p, 'react');
+      this.say(p, pick(this.rand, COP_HIT_SAY), 2);
+      this.events.push({ kind: 'bark', x: p.x, y: p.y, z: p.z, pitch: 0.75 });
+      return;
+    }
     const w = { oi: HITS.oi, chase: player ? HITS.chase : 0, shrug: HITS.shrug };
     const total = w.oi + w.chase + w.shrug;
     let r = this.rand() * total;
@@ -598,15 +633,15 @@ export class Peds {
     const far = PEDS.spawnRadius * DESPAWN;
     for (let i = this.list.length - 1; i >= 0; i--) {
       const p = this.list[i];
-      if (!p.pinned && Math.hypot(p.x - focus.x, p.z - focus.z) > far) this.list.splice(i, 1);
+      if (!p.pinned && !p.kept && Math.hypot(p.x - focus.x, p.z - focus.z) > far) this.list.splice(i, 1);
     }
-    while (this.list.length > PEDS.count) {
+    while (this.list.filter((p) => !p.kept).length > PEDS.count) {
       // The furthest first.
       let worst = -1;
       let worstD = -1;
       for (const [i, p] of this.list.entries()) {
         const d = Math.hypot(p.x - focus.x, p.z - focus.z);
-        if (!p.pinned && d > worstD) {
+        if (!p.pinned && !p.kept && d > worstD) {
           worst = i;
           worstD = d;
         }
@@ -618,23 +653,80 @@ export class Peds {
 
   /** Up to the count, one a tick: on a footpath near the focus, out of the camera's view (or far off). */
   private spawn(focus: { x: number; z: number }, yaw: number): void {
-    if (this.list.filter((p) => !p.pinned).length >= PEDS.count) return;
-    const r = PEDS.spawnRadius;
-    if (Math.hypot(focus.x - this.nearAt.x, focus.z - this.nearAt.z) > 20 || this.nearAt.r !== r) {
-      this.nearAt = { x: focus.x, z: focus.z, r };
-      this.near = this.walkable.filter((_, i) => {
+    if (this.list.filter((p) => !p.pinned && !p.kept).length >= PEDS.count) return;
+    const spot = this.pickSpot(focus, yaw, MIN_SPAWN, PEDS.spawnRadius, VIEW_FAR);
+    if (!spot) return;
+    const p = this.make(spot.edge, spot.dir, spot.s, spot.side, spot.x, spot.z);
+    p.heading = spot.heading;
+    this.list.push(p);
+    this.stats.spawned++;
+  }
+
+  /**
+   * A police officer on the footpath between `min` and `max` from the focus,
+   * out of the camera's view (inside `viewFar`): on foot, or on a bicycle.
+   * Kept: the cops decide when they go (remove()).
+   */
+  spawnOfficer(focus: { x: number; z: number }, yaw: number, min: number, max: number, bike: boolean, viewFar = 120): Ped | null {
+    const spot = this.pickSpot(focus, yaw, min, max, viewFar, max);
+    if (!spot) return null;
+    return this.officerAt(spot.x, spot.z, spot.heading, bike, spot);
+  }
+
+  /** An officer standing at (x, z) (getting out of a car, or ?debug spawnCop). */
+  officerAt(x: number, z: number, heading: number, bike: boolean, at?: { edge: RoadEdge; dir: Dir; s: number; side: number }): Ped | null {
+    const snap = at ?? (() => {
+      const n = this.w.roads.nearest(x, z, { within: 80, open: false });
+      return n && { edge: n.edge, dir: 1 as Dir, s: n.s, side: n.left ? 1 : -1 };
+    })();
+    if (!snap) return null;
+    const p = this.make(snap.edge, snap.dir, snap.s, snap.side, x, z);
+    p.look = copLook(this.rand);
+    p.role = 'cop';
+    p.kept = true;
+    p.bike = bike;
+    p.heading = heading;
+    p.pace = 0.95 + this.rand() * 0.1;
+    this.list.push(p);
+    return p;
+  }
+
+  remove(p: Ped): void {
+    const i = this.list.indexOf(p);
+    if (i >= 0) this.list.splice(i, 1);
+  }
+
+  /** Back to walking the footpath from where they are (an officer off duty again). */
+  release(p: Ped): void {
+    this.resume(p);
+  }
+
+  /** The dice, for the cops' own choices (so a seed repeats everything). */
+  random(): number {
+    return this.rand();
+  }
+
+  /** A walkable spot on a footpath near the focus, out of view inside `viewFar`, between `min` and `max` away. */
+  private pickSpot(focus: { x: number; z: number }, yaw: number, min: number, max: number, viewFar: number, searchRadius = PEDS.spawnRadius): { edge: RoadEdge; dir: Dir; s: number; side: number; x: number; z: number; heading: number } | null {
+    const r = Math.max(searchRadius, max);
+    // The edges round here, kept per radius (the crowd's and the officers' differ) until the focus moves on.
+    let cache = this.nearBy.get(r);
+    if (!cache || Math.hypot(focus.x - cache.x, focus.z - cache.z) > 20) {
+      const list = this.walkable.filter((_, i) => {
         const b = this.boxes;
         const dx = Math.max(b[i * 4] - focus.x, 0, focus.x - b[i * 4 + 2]);
         const dz = Math.max(b[i * 4 + 1] - focus.z, 0, focus.z - b[i * 4 + 3]);
         return Math.hypot(dx, dz) < r + 20;
       });
+      this.nearBy.set(r, (cache = { x: focus.x, z: focus.z, list, total: list.reduce((n, e) => n + e.length, 0) }));
     }
-    const total = this.near.reduce((n, e) => n + e.length, 0);
-    if (!total) return;
+    const near = cache.list;
+    const total = cache.total;
+    if (!total) return null;
     for (let attempt = 0; attempt < 4; attempt++) {
       let pickLen = this.rand() * total;
-      let edge = this.near[this.near.length - 1];
-      for (const e of this.near) {
+      let edge = near[near.length - 1];
+      for (const e of near) {
         if (pickLen < e.length) {
           edge = e;
           break;
@@ -650,18 +742,16 @@ export class Peds {
       const dx = x - focus.x;
       const dz = z - focus.z;
       const d = Math.hypot(dx, dz);
-      if (d < MIN_SPAWN || d > r) continue;
+      if (d < min || d > max) continue;
       const off = Math.acos(Math.max(-1, Math.min(1, (dx * Math.cos(yaw) + dz * Math.sin(yaw)) / d)));
-      if (off < VIEW_HALF_ANGLE && d < VIEW_FAR) continue;
+      if (off < VIEW_HALF_ANGLE && d < viewFar) continue;
       if (Number.isNaN(this.w.heightAt(x, z))) continue;
       const surface = this.w.surfaceAt?.(x, z);
       if (surface !== undefined && !WALKABLE.has(surface ?? '')) continue;
-      const p = this.make(edge, dir, s, side, x, z);
-      p.heading = edge.length ? this.w.roads.pointAt(edge, dir > 0 ? s : edge.length - s).heading + (dir > 0 ? 0 : Math.PI) : 0;
-      this.list.push(p);
-      this.stats.spawned++;
-      return;
+      const heading = edge.length ? this.w.roads.pointAt(edge, dir > 0 ? s : edge.length - s).heading + (dir > 0 ? 0 : Math.PI) : 0;
+      return { edge, dir, s, side, x, z, heading };
     }
+    return null;
   }
 
   private make(edge: RoadEdge, dir: Dir, s: number, side: number, x: number, z: number): Ped {
@@ -671,7 +761,7 @@ export class Peds {
       edge, dir, s, side: side > 0 ? 1 : -1, offset: edge.width / 2 + KERB_GAP, pace: 0.8 + this.rand() * 0.4,
       vx: 0, vy: 0, vz: 0, q: new THREE.Quaternion(), pq: new THREE.Quaternion(), spinAxis: new THREE.Vector3(1, 0, 0), spinRate: 0,
       reaction: 'oi', dazed: 0, phase: this.rand() * Math.PI * 2, look: makeLook(this.rand), says: '', saysFor: 0,
-      pinned: false, hitBy: -1, hitAt: -Infinity, bounces: 0, peak: 0,
+      pinned: false, role: 'ped', kept: false, bike: false, hitBy: -1, hitAt: -Infinity, bounces: 0, peak: 0,
     };
   }
 
@@ -679,7 +769,7 @@ export class Peds {
   debug() {
     return this.list.map((p) => ({
       id: p.id, state: p.state, pos: [p.x, p.y, p.z], ground: this.ground(p), heading: p.heading, dazed: p.dazed > 0, says: p.saysFor > 0 ? p.says : '',
-      reaction: p.reaction, peak: p.peak, bounces: p.bounces, pinned: p.pinned, surface: this.w.surfaceAt?.(p.x, p.z) ?? null,
+      reaction: p.reaction, peak: p.peak, bounces: p.bounces, pinned: p.pinned, role: p.role, bike: p.bike, surface: this.w.surfaceAt?.(p.x, p.z) ?? null,
     }));
   }
 }

@@ -18,6 +18,9 @@ export default {
   page: 'auckland',
   async run(t) {
     const { page, check, game, state, step, run, getIn, shot } = t;
+    // Officers are pedestrians too; they're counted in cops.mjs.
+    const noCops = () => game('knob', 'cops.on', false);
+    await noCops();
     const knobs = await game('knobs');
 
     // A crowd round the spawn: every new face appears out of the camera's view (or far off).
@@ -92,6 +95,7 @@ export default {
 
     // On foot: walk into someone and they step aside; sprint into them and you both stumble.
     await game('reset');
+    await noCops();
     await step(5);
     /** Points ahead of you, away from the camera (where W walks). */
     const ahead = async (m) => {
@@ -113,6 +117,7 @@ export default {
 
     // Off on the ? panel: no launch, then nobody about.
     await game('reset');
+    await noCops();
     await getIn();
     await game('teleportCar', 0, cx, cz, HEADING);
     await step(30);
