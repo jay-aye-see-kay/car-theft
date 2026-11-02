@@ -20,7 +20,7 @@ const RADIUS = 2.6;
  * (three's own instance colour multiplies every vertex, which would tint the
  * glass and tyres too.)
  */
-function paintable<M extends THREE.Material>(m: M): M {
+export function paintable<M extends THREE.Material>(m: M): M {
   m.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <color_pars_vertex>', '#include <color_pars_vertex>\nattribute float paint;')

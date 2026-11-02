@@ -49,8 +49,8 @@ export class Navigator {
     this.waypoint = snap ? { x: snap.x, z: snap.z } : { x, z };
   }
 
-  /** Per frame, from where you are, at game time `now`. */
-  update(from: Pt, goal: { x: number; z: number; label: string } | null, now: number): void {
+  /** Per frame, from where you are, at game time `now`; `byRoad` false (in a boat): straight there. */
+  update(from: Pt, goal: { x: number; z: number; label: string } | null, now: number, byRoad = true): void {
     if (this.waypoint && Math.hypot(this.waypoint.x - from.x, this.waypoint.z - from.z) < ARRIVED) this.waypoint = null;
     const dest = this.destination(goal);
     if (!dest) {
@@ -59,13 +59,13 @@ export class Navigator {
       this.key = '';
       return;
     }
-    const key = `${dest.x.toFixed(1)},${dest.z.toFixed(1)}`;
+    const key = `${dest.x.toFixed(1)},${dest.z.toFixed(1)},${byRoad}`;
     if (now < this.routedAt) this.routedAt = -Infinity; // the clock was reset
     const fresh = key !== this.key;
     if (fresh || (now - this.routedAt >= REROUTE_EVERY && this.offBy(from) > OFF_ROUTE)) {
       this.key = key;
       this.routedAt = now;
-      const r = this.roads?.route(from, dest, { within: SNAP });
+      const r = byRoad ? this.roads?.route(from, dest, { within: SNAP }) : null;
       this.route = r ? [from, ...r.points, dest] : [from, dest];
     }
     this.trim(from);

@@ -38,8 +38,11 @@ above.
 
 ## Decisions
 
-- **Area:** waterfront and Britomart up to K Road, Wynyard Quarter to Grafton
-  Gully, bbox `174.752,-36.861,174.776,-36.839` (lon/lat), ~5 km².
+- **Area:** waterfront and Britomart up to K Road and the Domain, Westhaven
+  and Wynyard Quarter east over Grafton and Parnell to Judges Bay, the port
+  and Hobson Bay, bbox `174.7515,-36.8663,174.8005,-36.8383` (lon/lat),
+  ~14 km² (18 × 13 chunks of 250 m; it was ~5 km², up to Grafton Gully, until
+  the map grew east). Still inside the one LiDAR tile below.
 - **Look:** PS2/PS3-era GTA (San Andreas / IV), not PS1. Textures, atlases,
   baked lighting are fine within the phone budget. Street level must read as
   Auckland.

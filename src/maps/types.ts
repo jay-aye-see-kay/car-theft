@@ -36,6 +36,13 @@ export interface DebugView {
   at: [number, number, number];
 }
 
+export interface Mooring {
+  x: number;
+  z: number;
+  heading: number;
+  kind: 'tinny' | 'runabout' | 'launch';
+}
+
 export interface GameMap {
   readonly name: string;
   /** Splash-screen subtitle. */
@@ -70,9 +77,9 @@ export interface GameMap {
   canopyAt?(x: number, z: number): number | null;
   /**
    * Open water: a sea-level plane wherever the ground is lower. Outside the
-   * map's bounds it's drawn only north of `seaSouth` (the harbour side).
+   * map's bounds it's drawn only north of `seaSouth` (the harbour side): [beyond the west and north edges, beyond the east edge].
    */
-  readonly water?: { level: number; bounds: { minX: number; minZ: number; maxX: number; maxZ: number }; seaSouth: number };
+  readonly water?: { level: number; bounds: { minX: number; minZ: number; maxX: number; maxZ: number }; seaSouth: readonly [number, number] };
   /**
    * The nearest loaded ground point within `maxDist` of (x, z) that `ok`
    * accepts (given its surface and height), or null.
@@ -88,6 +95,8 @@ export interface GameMap {
   readonly roads?: RoadGraph;
   /** The picture of the map from above (map.png, tools/citygen/map.ts) and the ground it covers, for the minimap and full map. */
   readonly chart?: { url: URL; bounds: { minX: number; minZ: number; maxX: number; maxZ: number } };
+  /** Boats to borrow, moored on the water (maps with water only): where, facing, and which kind. */
+  readonly moorings?: readonly Mooring[];
   /** Extra numbers for ?debug and the smoke test. */
   debugInfo(): Record<string, number>;
 }

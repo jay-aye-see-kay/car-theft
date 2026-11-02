@@ -1,7 +1,9 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { GameAudio } from './audio.ts';
-import { ChaseCamera, DRIVING, FLYING, ON_FOOT, fitFov } from './camera.ts';
+import { BOATING_CAM, ChaseCamera, DRIVING, FLYING, ON_FOOT, fitFov } from './camera.ts';
+import { Boat, BOAT_SPECS, yawOf } from './boat.ts';
+import { BoatsMesh } from './boat-mesh.ts';
 import { FLY_CODE, StickCode } from './cheats.ts';
 import { TERRAIN_ONLY_QUERY } from './city/building-chunk.ts';
 import { Bubbles } from './bubbles.ts';
@@ -47,6 +49,15 @@ const STEP_BATCH = 60;
 /** step(): promise hops a mission script gets to run between ticks. */
 const SCRIPT_HOPS = 8;
 const ENTER_RANGE = 3.6; // m from the car's centre
+/** Boats: this far (across the ground) from the side of the hull, and this far above or below it, m. */
+const BOARD_RANGE = 6.5;
+const BOARD_DROP = 4.5;
+/** Getting off a boat: dry ground within this far of it, else you're in the drink, m. */
+const LAND_REACH = 9;
+/** Boats far from you aren't simulated (they're moored anyway), m. */
+const BOAT_SIM = 450;
+/** How far from its mooring a boat may be moved to lie alongside a wharf, m. */
+const SETTLE_REACH = 60;
 /** Send the shared mission to guests this often, s (the channel drops some; each is complete). */
 const SHARE_EVERY = 0.2;
 const params = new URLSearchParams(location.search);
@@ -216,6 +227,23 @@ async function main() {
   const skids = new SkidMarks();
   scene.add(skids.mesh);
 
+  // Boats to borrow (src/boat.ts), moored round the waterfront; each client has its own.
+  const boats = map.water && map.moorings
+    ? map.moorings.map((m, i) => {
+        const spec = BOAT_SPECS[m.kind];
+        return new Boat(world, m.kind, m.x, m.z, m.heading, map.water!.level, spec.paints[(i * 7 + 3) % spec.paints.length]);
+      })
+    : [];
+  const boatsMesh = new BoatsMesh(boats);
+  scene.add(boatsMesh.group);
+  /** Spray off the hull of the boat you're driving (its own pool, so splashes don't count it). */
+  const spray = new Splash();
+  scene.add(spray.points);
+  /** Moorings checked against the ground once it's streamed in (nudged into deeper water). */
+  const settled = boats.map(() => false);
+  /** When the ground under each mooring arrived (tick clock). */
+  const groundSince = boats.map(() => Infinity);
+
   // Dizzy (src/dizzy.ts) with stars over the head, and the pedestrians
   // (Auckland only: they walk the road graph's footpaths).
   const dizzy = new Dizzy();
@@ -237,7 +265,8 @@ async function main() {
   const dizzyDrive = { throttle: 0, brake: 0, steer: 0, handbrake: false };
 
   // Missions: Auckland only, since their places are real streets (the map's gazetteer).
-  const missions = map.places ? new MissionRunner(MISSIONS, map.places, (x, z) => map.heightAt(x, z), storage) : null;
+  // Out on the harbour, the ground is the water's surface (a boat's on it, not 8 m above the sea floor).
+  const missions = map.places ? new MissionRunner(MISSIONS, map.places, (x, z) => Math.max(map.heightAt(x, z), map.water?.level ?? -Infinity), storage) : null;
   const markers = new MissionMarkers();
   scene.add(markers.group);
   const missionHud = new MissionHud(hud);
@@ -304,10 +333,15 @@ async function main() {
   if (cops) cops.tickets = Number(storage?.getItem(TICKETS_KEY)) || 0;
 
   let driving: Car | null = null;
+  /** The boat you're at the helm of. */
+  let boating: Boat | null = null;
   let exitRequested = false;
   /** When the shared mission last went to the guests, game s. */
   let lastShared = -Infinity;
   let upsideDownTime = 0;
+
+  /** What the camera, streaming and map follow: the car or boat you're in, else you. */
+  const focusObject = (): THREE.Object3D => (driving ? driving.object : boating ? boating.object : player.object);
 
   const nearestCar = (): Car | null => {
     let best: Car | null = null;
@@ -321,6 +355,146 @@ async function main() {
       }
     }
     return best;
+  };
+
+  const nearestBoat = (): Boat | null => {
+    let best: Boat | null = null;
+    let bestD = Infinity;
+    const p = player.position;
+    for (const b of boats) {
+      if (b.frozen) continue;
+      // From the side of the hull: along its keel line, less half its beam.
+      const o = b.object.position;
+      const h = b.heading();
+      const dx = p.x - o.x;
+      const dz = p.z - o.z;
+      const along = THREE.MathUtils.clamp(dx * Math.cos(h) - dz * Math.sin(h), -b.spec.length / 2, b.spec.length / 2);
+      const d = Math.hypot(dx - Math.cos(h) * along, dz + Math.sin(h) * along) - b.spec.beam / 2;
+      if (d < BOARD_RANGE && d < bestD && Math.abs(o.y - p.y) < BOARD_DROP && Math.abs(b.forwardSpeed()) < 3) {
+        best = b;
+        bestD = d;
+      }
+    }
+    return best;
+  };
+
+  /** Where the water is: the sea level, and whether (x, z) is over the sea rather than land. */
+  const waters = {
+    level: water?.level ?? 0,
+    wet: (x: number, z: number) => {
+      const g = map.heightAt(x, z);
+      if (!Number.isNaN(g)) return !!water?.covers(g);
+      // Past the edge of the map: open harbour where the sea's drawn (north, and east to Hobson Bay).
+      const c = map.clamp(x, z);
+      return !!map.water && (c.x !== x || c.z !== z) && z < (x > c.x ? map.water.seaSouth[1] : map.water.seaSouth[0]);
+    },
+  };
+
+  /**
+   * Once the ground's in, each moored boat goes to the nearest spot to its
+   * mooring that's deep enough, clear of piles and pontoons, and alongside
+   * dry ground you can step aboard from, lying side-on to it.
+   */
+  const settleBoats = () => {
+    if (!water) return;
+    for (const [i, b] of boats.entries()) {
+      const { x: hx, z: hz, heading } = b.home;
+      if (settled[i]) continue;
+      // Colliders only answer queries a step after they arrive: wait a frame once the ground's in.
+      if (!map.hasGround(hx, hz)) {
+        groundSince[i] = Infinity;
+        continue;
+      }
+      groundSince[i] = Math.min(groundSince[i], tickClock);
+      if (tickClock - groundSince[i] < FIXED_DT * 2) continue;
+      settled[i] = true;
+      const half = b.spec.length / 2;
+      const spots: { x: number; z: number; d: number }[] = [];
+      for (let dx = -SETTLE_REACH; dx <= SETTLE_REACH; dx += 3) {
+        for (let dz = -SETTLE_REACH; dz <= SETTLE_REACH; dz += 3) {
+          const d = Math.hypot(dx, dz);
+          if (d <= SETTLE_REACH) spots.push({ x: hx + dx, z: hz + dz, d });
+        }
+      }
+      spots.sort((a, c) => a.d - c.d);
+      let pick: { x: number; z: number; heading: number; score: number } | null = null;
+      let open: { x: number; z: number } | null = null;
+      for (const { x, z } of spots) {
+        let depth = Infinity;
+        for (const [ax, az] of [[0, 0], [half, 0], [-half, 0], [0, half], [0, -half]]) depth = Math.min(depth, water.level - map.heightAt(x + ax, z + az));
+        if (!(depth > 1)) continue;
+        // Not on top of another boat already tied up.
+        const crowded = boats.some((o, k) => {
+          if (k === i || !settled[k]) return false;
+          const t = o.body.translation();
+          return Math.hypot(t.x - x, t.z - z) < (o.spec.length + b.spec.length) / 2 + 1;
+        });
+        if (crowded) continue;
+        // Failing anywhere alongside, at least afloat.
+        open ??= { x, z };
+        const land = map.nearest?.(x, z, b.spec.beam / 2 + 6, (lx, lz, _s, g) => dryGround(lx, lz, g, 0.3));
+        if (!land) continue;
+        // Side-on to the land, bow whichever way is nearer its mooring's heading.
+        const lx = land.x - x;
+        const lz = land.z - z;
+        const h1 = Math.atan2(-lx, -lz);
+        const h2 = h1 + Math.PI;
+        const near = (h: number) => Math.abs(Math.atan2(Math.sin(h - heading), Math.cos(h - heading)));
+        const h = near(h1) < near(h2) ? h1 : h2;
+        // Deep enough the whole length of the hull as it'll lie.
+        let deep = true;
+        for (let along = -half; along <= half; along += 1) {
+          for (const across of [-b.spec.beam / 2 - 0.3, 0, b.spec.beam / 2 + 0.3]) {
+            const px = x + Math.cos(h) * along - Math.sin(h) * across;
+            const pz = z - Math.sin(h) * along - Math.cos(h) * across;
+            if (!(water.level - map.heightAt(px, pz) > 1)) deep = false;
+          }
+        }
+        if (!deep) continue;
+        let blocked = false;
+        world.intersectionsWithShape({ x, y: water.level + 1.45, z }, carRotation(h), new RAPIER.Cuboid(half, 1.95, b.spec.beam / 2), () => !(blocked = true), RAPIER.QueryFilterFlags.ONLY_FIXED);
+        if (blocked) continue;
+        // The closer alongside the better; good enough once it's right by the edge.
+        const score = Math.hypot(lx, lz) + Math.hypot(x - hx, z - hz) * 0.05;
+        if (!pick || score < pick.score) pick = { x, z, heading: h, score };
+        if (Math.hypot(lx, lz) < b.spec.beam / 2 + 3) break;
+      }
+      if (pick) b.place(pick.x, water.level, pick.z, pick.heading);
+      else b.place(open?.x ?? hx, water.level, open?.z ?? hz, heading);
+      b.moor();
+    }
+  };
+
+  const board = (boat: Boat) => {
+    setFlying(false);
+    boating = boat;
+    exitRequested = false;
+    player.setActive(false);
+    input.setMode('car');
+    boat.impact = 0;
+  };
+
+  /** Off the boat: onto the nearest dry ground within reach, or over the side if there's none. */
+  const disembark = (boat: Boat) => {
+    const o = boat.object.position;
+    const h = yawOf(boat.object.quaternion);
+    const land = map.nearest?.(o.x, o.z, LAND_REACH, (x, z, _s, g) => dryGround(x, z, g, 0.3));
+    let spot: THREE.Vector3;
+    if (land) {
+      const g = map.heightAt(land.x, land.z);
+      spot = new THREE.Vector3(land.x, g + 0.05, land.z);
+    } else {
+      // Over the right-hand side, into the harbour (and fished out onto the shore).
+      spot = new THREE.Vector3(o.x - Math.sin(h) * (boat.spec.beam / 2 + 0.8), water ? water.level - 0.2 : o.y, o.z - Math.cos(h) * (boat.spec.beam / 2 + 0.8));
+    }
+    player.place(spot, land ? Math.atan2(-(land.z - o.z), land.x - o.x) : h);
+    player.setActive(true);
+    // Tied up wherever you leave it.
+    boat.moor();
+    boating = null;
+    exitRequested = false;
+    input.setMode('foot');
+    chase.snap(player.heading);
   };
 
   // Cheat: flick the stick up, up, down, down, left, right, left, right to fly.
@@ -500,8 +674,9 @@ async function main() {
         ...cops?.share(),
       };
     }
-    const p = player.position;
-    const h = player.heading;
+    // At a boat's helm: shown to the others standing at it (boats aren't shared in rooms yet).
+    const p = boating ? _p.copy(boating.object.position).setY(boating.object.position.y + 0.3) : player.position;
+    const h = boating ? yawOf(boating.object.quaternion) : player.heading;
     return {
       c: -1,
       p: roundVec(p.x, p.y, p.z),
@@ -517,6 +692,7 @@ async function main() {
   const spawnNear = async (at: Pose | null) => {
     if (!at) return;
     if (driving) exit(driving);
+    if (boating) disembark(boating);
     setFlying(false);
     const [x, y, z] = at.p;
     await map.ensureLoaded(x, z);
@@ -640,6 +816,12 @@ async function main() {
       const v = driving.body.linvel();
       return { x: t.x, y: t.y, z: t.z, heading: _euler.setFromQuaternion(driving.object.quaternion, 'YXZ').y, vx: v.x, vz: v.z, car: driving, flying: false, skid: driving.skid };
     }
+    if (boating) {
+      // Out on the water no officer can reach you (like flying): they watch and wait.
+      const t = boating.body.translation();
+      const v = boating.body.linvel();
+      return { x: t.x, y: t.y, z: t.z, heading: yawOf(boating.object.quaternion), vx: v.x, vz: v.z, car: null, flying: true, skid: 0 };
+    }
     const b = player.body.translation();
     const h = player.heading;
     return { x: b.x, y: b.y - 0.9, z: b.z, heading: h, vx: Math.cos(h) * player.speed, vz: -Math.sin(h) * player.speed, car: null, flying: player.flying, skid: 0 };
@@ -705,7 +887,7 @@ async function main() {
    */
   const afterTick = (drivingIndex: number) => {
     const speeds = carSpeeds.measure(carLikes, FIXED_DT);
-    const onFoot = !driving && !player.flying;
+    const onFoot = !driving && !boating && !player.flying;
     const body = player.body.translation();
     if (onFoot && player.landed > 0) {
       if (player.landed > DIZZY.fallSpeed) dizzy.trigger(severity(player.landed, DIZZY.fallSpeed), 'fall');
@@ -733,7 +915,7 @@ async function main() {
     }
     if (peds) {
       for (const [i, c] of carLikes.entries()) c.player = i === drivingIndex;
-      const focus = driving ? driving.body.translation() : body;
+      const focus = driving ? driving.body.translation() : boating ? boating.body.translation() : body;
       const h = player.heading;
       const walker = onFoot ? { x: body.x, y: body.y, z: body.z, vx: Math.cos(h) * player.speed, vz: -Math.sin(h) * player.speed, speed: player.inControl ? player.speed : 0 } : null;
       const { stumble } = peds.step(FIXED_DT, focus, chase.yaw, carLikes, speeds.map((v, i) => (cars[i].frozen ? null : v)), walker);
@@ -757,26 +939,30 @@ async function main() {
     input.update();
     if (!started) input.clearPresses();
     // Game time, not wall time: a stalled frame shouldn't spoil a code.
-    if (started && !driving && flyCode.feed(input.moveX, input.moveY, clock)) setFlying(!player.flying);
+    if (started && !driving && !boating && flyCode.feed(input.moveX, input.moveY, clock)) setFlying(!player.flying);
     if (input.consume('mute')) {
       audio.toggleMute();
       setMuteIcon();
     }
     /** Caught: no getting away (or in) while they have a word. */
     const held = !!cops?.scene;
-    const nearby = driving || held ? null : nearestCar();
+    const nearby = driving || boating || held ? null : nearestCar();
+    const nearbyBoat = driving || boating || held || nearby ? null : nearestBoat();
     if (input.consume('enterExit') && !held) {
-      if (driving) exitRequested = true;
+      if (driving || boating) exitRequested = true;
       else if (nearby) enter(nearby);
+      else if (nearbyBoat) board(nearbyBoat);
     }
-    if (input.consume('reset') && driving) {
-      resetCar(driving);
-      chase.snap();
+    if (input.consume('reset')) {
+      if (driving) {
+        resetCar(driving);
+        chase.snap();
+      } else if (boating) boating.rightUp(waters.level);
     }
     const jump = input.consume('jump') && !held;
 
     // Dizzy: wiggling the stick or mashing jump / handbrake shakes it off sooner.
-    dizzy.update(frameDt, input.moveX, input.moveY, jump ? 1 : 0, !!driving);
+    dizzy.update(frameDt, input.moveX, input.moveY, jump ? 1 : 0, !!driving || !!boating);
     const daze = dizzy.amount;
     // Mush: the controls lag and drift, more the dizzier you are.
     const ease = 1 - Math.exp(-frameDt * THREE.MathUtils.lerp(40, 2.5, daze * DIZZY.mush));
@@ -805,7 +991,8 @@ async function main() {
       throttle: input.drive.throttle * (1 - DIZZY.slowdown * daze * 0.6),
     });
 
-    map.update(debugView ? _p.fromArray(debugView.from) : driving ? driving.object.position : player.position);
+    map.update(debugView ? _p.fromArray(debugView.from) : focusObject().position);
+    settleBoats();
     // Into the harbour: a splash, a moment sinking (heavily damped, like
     // water), then back on the nearest road.
     for (const c of cars) {
@@ -820,23 +1007,23 @@ async function main() {
         c.car.body.setAngularDamping(3);
       } else if (c.soaked !== null && clock - c.soaked > SOAK_CAR) fishOutCar(c);
     }
-    if (!driving && !player.flying) {
+    if (!driving && !boating && !player.flying) {
       const p = player.position;
       // Feet just under the surface is enough: they may be stuck on the drop by the sea wall.
       if (playerSoaked === null && inWater(p.x, p.y + SUBMERGED - 0.15, p.z)) {
         playerSoaked = clock;
         makeSplash(p.x, p.z, 0.5, true);
       } else if (playerSoaked !== null && clock - playerSoaked > SOAK_PLAYER) fishOutPlayer();
-    } else if (driving) playerSoaked = null;
+    } else if (driving || boating) playerSoaked = null;
     // The town's traffic and parked cars: out of sight ones come and go, and the drivers decide what to do.
     if (town) {
-      const focus = debugView ? _p.fromArray(debugView.from) : driving ? driving.object.position : player.position;
-      const walker = !driving && !player.flying ? player.position : null;
+      const focus = debugView ? _p.fromArray(debugView.from) : focusObject().position;
+      const walker = !driving && !boating && !player.flying ? player.position : null;
       town.step(frameDt, focus, chase.yaw, { cars: carList, absent: (car) => frozenCar(car), walker }, (car) => car === driving || remotes.drives(car));
     }
     // The cops: who sees you, heat, who's after you and what they do (before the physics, like the traffic).
     if (cops && started) {
-      cops.step(frameDt, suspect(), chase.yaw, { cars: carList, absent: (car) => frozenCar(car), walker: !driving && !player.flying ? player.position : null });
+      cops.step(frameDt, suspect(), chase.yaw, { cars: carList, absent: (car) => frozenCar(car), walker: !driving && !boating && !player.flying ? player.position : null });
       copEvents();
     }
     // Freeze anything standing on ground that hasn't streamed in yet, rather
@@ -852,14 +1039,27 @@ async function main() {
     }
     // The physics body, not the interpolated model, which sits at the origin until the first render.
     const feet = player.body.translation();
-    if (!driving && lost(feet)) {
+    if (!driving && !boating && lost(feet)) {
       const { x, z } = map.clamp(feet.x, feet.z);
       const ground = map.heightAt(x, z);
       player.place(new THREE.Vector3(x, (Number.isNaN(ground) ? 0 : ground) + 0.5, z), player.heading);
       chase.snap(player.heading);
     }
     // Flying outruns the streaming sometimes, and there's no ground to fall through.
-    const playerFrozen = !driving && !player.flying && !map.hasGround(player.position.x, player.position.z);
+    const playerFrozen = !driving && !boating && !player.flying && !map.hasGround(player.position.x, player.position.z);
+    // Boats: only near you, and only once the ground (and so the shore) under them is in.
+    const focusAt = focusObject().position;
+    for (const b of boats) {
+      const o = b.body.translation();
+      const frozen = b !== boating && (!map.hasGround(o.x, o.z) || Math.hypot(o.x - focusAt.x, o.z - focusAt.z) > BOAT_SIM);
+      if (frozen !== b.frozen) b.body.setEnabled(!frozen);
+      b.frozen = frozen;
+      // Drifted off the map or sunk into the ground somehow: back to its mooring.
+      if (!frozen && lost(o)) {
+        b.place(b.home.x, waters.level, b.home.z, b.home.heading);
+        b.moor();
+      }
+    }
     // Fly over the harbour, not along its floor.
     const floor = player.flying ? Math.max(map.heightAt(feet.x, feet.z, feet.y), water ? water.level : -Infinity) : NaN;
 
@@ -879,10 +1079,22 @@ async function main() {
         else if (exitRequested) car.update({ throttle: 0, brake: Math.abs(car.forwardSpeed()) > 1 ? 1 : 0, steer: 0, handbrake: false }, FIXED_DT);
         else car.update(dizzyDrive, FIXED_DT);
       }
-      if (!driving && !playerFrozen) player.update({ moveX, moveZ, sprint, jump: jump && steps === 0, rise: input.rise, floor }, FIXED_DT);
+      const tickTime = clock - accumulator + FIXED_DT;
+      for (const b of boats) {
+        if (b.frozen) continue;
+        const helm = b !== boating ? null : exitRequested ? { throttle: 0, brake: b.forwardSpeed() > 1 ? 1 : 0, steer: 0, handbrake: false } : dizzyDrive;
+        if (b === boating) b.moored = false;
+        b.update(helm, waters, tickTime, FIXED_DT);
+        // Past the edge of the map, a current sets it back in (before it's far enough out to be lost).
+        const t = b.body.translation();
+        const c = map.clamp(t.x, t.z);
+        if (c.x !== t.x || c.z !== t.z) b.body.addForce({ x: (c.x - t.x) * b.spec.mass * 1.5, y: 0, z: (c.z - t.z) * b.spec.mass * 1.5 }, true);
+      }
+      if (!driving && !boating && !playerFrozen) player.update({ moveX, moveZ, sprint, jump: jump && steps === 0, rise: input.rise, floor }, FIXED_DT);
       world.step();
       for (const { car, frozen } of cars) if (!frozen) car.afterStep(FIXED_DT);
-      if (!driving) player.afterStep();
+      for (const b of boats) if (!b.frozen) b.afterStep(FIXED_DT);
+      if (!driving && !boating) player.afterStep();
       remotes.afterStep();
       remoteCops.afterStep(FIXED_DT);
       afterTick(drivingIndex);
@@ -893,6 +1105,7 @@ async function main() {
     perf.physicsMs = smooth(perf.physicsMs, performance.now() - tPhys);
 
     if (driving && exitRequested && Math.abs(driving.forwardSpeed()) < 1.5) exit(driving);
+    if (boating && exitRequested && Math.abs(boating.forwardSpeed()) < 2) disembark(boating);
     if (evicted && driving) {
       exit(driving);
       roomPanel.toast('Someone else got in first');
@@ -905,6 +1118,7 @@ async function main() {
       resetCar(driving);
       upsideDownTime = 0;
     }
+    if (boating?.isCapsized()) boating.rightUp(waters.level);
 
     map.sync();
     alpha ??= accumulator / FIXED_DT;
@@ -936,9 +1150,42 @@ async function main() {
       car.impact = 0;
     }
     skids.flush();
+    for (const b of boats) {
+      if (b.frozen) continue;
+      b.render(alpha);
+      if (b === boating) {
+        if (b.impact > 3.5) {
+          const strength = Math.min(1, (b.impact - 3.5) / 10);
+          audio.impact(strength);
+          chase.shake(strength * 0.5);
+          crash = Math.max(crash, b.impact);
+          if (CRASH_DIZZY.on && b.impact > CRASH_DIZZY.impact) {
+            dizzy.trigger(severity(b.impact, CRASH_DIZZY.impact, CRASH_DIZZY.fullImpact), 'crash', CRASH_DIZZY.minTime, CRASH_DIZZY.maxTime);
+          }
+        }
+        // Spray off the stern quarters at speed, and a slap off the bow coming down hard.
+        const speed = b.forwardSpeed();
+        if (b.wet > 0 && speed > 4 && water) {
+          const n = Math.min(3, Math.floor(speed / 5));
+          for (const side of [-1, 1]) spray.burst(b.stern(_p, side).setY(water.level), Math.min(0.6, speed / 30), n);
+        }
+        const vy = b.body.linvel().y;
+        if (vy < -2.2 && b.wet > 0.3 && water) makeSplash(b.object.position.x, b.object.position.z, Math.min(1, -vy / 6), true);
+      }
+      b.impact = 0;
+    }
     splashes.update(frameDt);
+    spray.update(frameDt);
 
-    if (driving) {
+    if (boating) {
+      input.consumeLook(frameDt);
+      const speed = boating.forwardSpeed();
+      chase.update(frameDt, BOATING_CAM, boating.object.position, yawOf(boating.object.quaternion), speed, boating.collider);
+      speedo.textContent = `${Math.round(Math.abs(speed) * 3.6)}`;
+      // An outboard revs higher than the sedan for the same speed.
+      audio.setEngine(true, speed * 1.6, boating.throttle);
+      audio.setSkid(0, 0);
+    } else if (driving) {
       input.consumeLook(frameDt); // camera stays behind the car
       const speed = driving.forwardSpeed();
       const heading = _euler.setFromQuaternion(driving.object.quaternion, 'YXZ').y;
@@ -961,12 +1208,12 @@ async function main() {
     player.stepped = false;
 
     // Seeing stars: over your head, or over the car if you're driving.
-    player.wobble = driving ? 0 : daze;
+    player.wobble = driving || boating ? 0 : daze;
     chase.sway(daze * DIZZY.sway);
     stars.begin();
     if (daze > 0) {
-      const at = driving ? driving.object.position : player.position;
-      stars.add(at.x, at.y + (driving ? 1.25 : 1.95), at.z, daze, clock);
+      const at = focusObject().position;
+      stars.add(at.x, at.y + (driving ? 1.25 : boating ? 1.6 : 1.95), at.z, daze, clock);
     }
     const theirOfficers = remoteCops.people(remotes.cops(), frameDt);
     if (peds) {
@@ -995,10 +1242,10 @@ async function main() {
 
     // Missions run on physics poses, not interpolated ones, so stepped tests replay exactly.
     if (missions && started) {
-      const at = driving ? driving.body.translation() : player.body.translation();
+      const at = driving ? driving.body.translation() : boating ? boating.body.translation() : player.body.translation();
       const alone = room.role === 'solo';
       missions.tick({
-        clock, x: at.x, y: at.y, z: at.z, driving: !!driving, speedKmh: driving ? Math.abs(driving.forwardSpeed()) * 3.6 : 0, crash,
+        clock, x: at.x, y: at.y, z: at.z, driving: !!driving || !!boating, boat: !!boating, speedKmh: driving ? Math.abs(driving.forwardSpeed()) * 3.6 : boating ? Math.abs(boating.forwardSpeed()) * 3.6 : 0, crash,
         id: room.myId, name: alone ? 'You' : room.name, others: alone ? [] : remotes.players(), guest: room.role === 'guest',
       });
       for (const cue of missions.takeCues()) audio.cue(cue);
@@ -1012,12 +1259,14 @@ async function main() {
       }
     }
     // On foot the camera is always close; this only hides them from far debug views.
-    player.object.visible = !driving && player.position.distanceTo(camera.position) < CAR_DETAIL;
+    player.object.visible = !driving && !boating && player.position.distanceTo(camera.position) < CAR_DETAIL;
     playerShadow.visible = player.object.visible;
-    speedoBox.classList.toggle('hidden', !driving);
-    input.setCanEnter(!!nearby);
+    speedoBox.classList.toggle('hidden', !driving && !boating);
+    input.setCanEnter(!!nearby || !!nearbyBoat);
     prompt.textContent = nearby
       ? (coarse ? 'Tap 🚗 to get in' : 'Press F to get in')
+      : nearbyBoat
+        ? (coarse ? `Tap 🚗 to borrow the ${nearbyBoat.spec.label.toLowerCase()}` : `Press F to borrow the ${nearbyBoat.spec.label.toLowerCase()}`)
       : player.flying && !driving
         ? (coarse ? 'Flying: UP / DOWN to climb, the same code to land' : 'Flying: Space / C to climb, Shift for speed, the same code to land')
         : (missions?.view().hint ?? '');
@@ -1032,6 +1281,7 @@ async function main() {
     water?.update(camera, clock);
     camera.updateMatrixWorld();
     drawCars();
+    boatsMesh.update(boats, camera);
     remotes.render(alpha, frameDt, camera);
     bubbles.update([
       ...(peds ? peds.list.filter((p) => p.saysFor > 0).map((p) => ({ x: p.x, y: p.y + BUBBLE_LIFT, z: p.z, text: p.says })) : []),
@@ -1064,27 +1314,33 @@ async function main() {
       for (const s of view.starts) out.push({ kind: 'mission', x: s.x, z: s.z, label: full ? s.title : undefined, edge: s === view.nearest });
       for (const t of view.targets) out.push({ kind: 'goal', x: t.x, z: t.z, label: full ? t.label : undefined, edge: true });
     }
+    // Boats to borrow (not the one you're in).
+    for (const b of boats) {
+      if (b === boating) continue;
+      const o = b.object.position;
+      out.push({ kind: 'boat', x: o.x, z: o.z, facing: bearing(Math.cos(b.heading()), -Math.sin(b.heading())), label: full ? b.spec.label : undefined });
+    }
     if (room.role !== 'solo') for (const p of remotes.players()) out.push({ kind: 'remote', x: p.x, z: p.z, label: full ? p.name : undefined });
     return out;
   };
   /** Routes from where you are to your waypoint, else the mission's goal. */
   const navigate = () => {
-    const you = (driving ? driving.object : player.object).position;
-    nav.update(you, missions?.view().target ?? null, clock);
+    const you = focusObject().position;
+    nav.update(you, missions?.view().target ?? null, clock, !boating);
     return you;
   };
   const mapScene = () => {
     const you = navigate();
-    return { you: { x: you.x, z: you.z, facing: facingOf(driving ? driving.object : player.object) }, route: nav.route, blips: mapBlips(true) };
+    return { you: { x: you.x, z: you.z, facing: facingOf(focusObject()) }, route: nav.route, blips: mapBlips(true) };
   };
   const drawMinimap = (dt: number) => {
     const you = navigate();
-    const speed = driving ? Math.abs(driving.forwardSpeed()) : 0;
+    const speed = driving ? Math.abs(driving.forwardSpeed()) : boating ? Math.abs(boating.forwardSpeed()) : 0;
     mapRadius += (Math.min(MAP_RADIUS_MAX, MAP_RADIUS + speed * MAP_RADIUS_PER_MS) - mapRadius) * Math.min(1, dt * 1.5);
     camera.getWorldDirection(_dir);
     const blips = mapBlips(false);
     if (nav.waypoint) blips.push({ kind: 'waypoint', x: nav.waypoint.x, z: nav.waypoint.z, edge: true });
-    blips.push({ kind: 'player', x: you.x, z: you.z, facing: facingOf(driving ? driving.object : player.object) });
+    blips.push({ kind: 'player', x: you.x, z: you.z, facing: facingOf(focusObject()) });
     const dest = nav.destination(missions?.view().target ?? null);
     const d = nav.left;
     const label = dest ? `${dest.kind === 'waypoint' ? '' : `${dest.label} · `}${d < 1000 ? `${Math.round(d / 10) * 10} m` : `${(d / 1000).toFixed(1)} km`}` : '';
@@ -1171,7 +1427,7 @@ async function main() {
     if (!manual) accumulator = 0; // each frame below is then exactly one physics step
     manual = true;
     for (let done = 0; done < n; ) {
-      const p = debugView ? _p.fromArray(debugView.from) : driving ? driving.object.position : player.position;
+      const p = debugView ? _p.fromArray(debugView.from) : focusObject().position;
       await map.ensureLoaded(p.x, p.z);
       // Everything the streamer wants from here, not just what a frame happened to start.
       for (map.update(p); map.debugInfo().inFlight; map.update(p)) {
@@ -1195,15 +1451,16 @@ async function main() {
     (window as unknown as { __game: unknown }).__game = {
       state: () => ({
         started,
-        mode: driving ? 'car' : 'foot',
+        mode: driving ? 'car' : boating ? 'boat' : 'foot',
         drivingIndex: cars.findIndex((c) => c.car === driving),
         player: player.position.toArray(),
         playerGrounded: player.isGrounded,
         flying: player.flying,
-        speedKmh: driving ? Math.abs(driving.forwardSpeed()) * 3.6 : 0,
+        speedKmh: driving ? Math.abs(driving.forwardSpeed()) * 3.6 : boating ? Math.abs(boating.forwardSpeed()) * 3.6 : 0,
         skid: driving?.skid ?? 0,
         skidQuads: skids.laid,
         nearCar: !!nearestCar(),
+        nearBoat: !driving && !boating && !!nearestBoat(),
         /** The ? panel or the full map is open (the game is paused). */
         paused,
         dizzy: dizzy.active,
@@ -1251,6 +1508,52 @@ async function main() {
         ...map.debugInfo(),
       }),
       groundHeight: (x: number, z: number) => map.heightAt(x, z),
+      /** Boats (src/boat.ts): kind, position, heading, speed, how much of the hull's wet, and whether it's the one you're in. */
+      boats: () => boats.map((b, i) => ({
+        index: i,
+        kind: b.kind,
+        pos: b.object.position.toArray().map((v) => Math.round(v * 100) / 100),
+        heading: Math.round(b.heading() * 100) / 100,
+        speed: Math.round(b.forwardSpeed() * 100) / 100,
+        wet: b.wet,
+        frozen: b.frozen,
+        settled: settled[i],
+        mine: b === boating,
+        drawn: boatsMesh.drawn,
+      })),
+      /** Stand on the nearest dry ground beside boat `index` (to walk up and get in). */
+      besideBoat: async (index: number) => {
+        const b = boats[index];
+        await map.ensureLoaded(b.home.x, b.home.z);
+        await step(4);
+        settleBoats();
+        const o = b.body.translation();
+        const land = map.nearest?.(o.x, o.z, 12, (x, z, _s, g) => dryGround(x, z, g, 0.3));
+        if (!land) return null;
+        // Walk to the edge, as a player would: towards the boat while the ground stays level.
+        const g = map.heightAt(land.x, land.z);
+        const dl = Math.hypot(o.x - land.x, o.z - land.z) || 1;
+        const ux = (o.x - land.x) / dl;
+        const uz = (o.z - land.z) / dl;
+        for (let k = 0; k < 20; k++) {
+          if (!(Math.abs(map.heightAt(land.x + ux * 1.3, land.z + uz * 1.3) - g) < 0.3)) break;
+          land.x += ux * 0.5;
+          land.z += uz * 0.5;
+        }
+        const heading = Math.atan2(-uz, ux);
+        player.place(new THREE.Vector3(land.x, g + 0.05, land.z), heading);
+        chase.snap(heading);
+        return [land.x, g, land.z];
+      },
+      /** Straight to the helm of boat `index`; with (x, z), moved there first (on the water), facing `heading`. */
+      boardBoat: async (index: number, x?: number, z?: number, heading = 0) => {
+        const b = boats[index];
+        await map.ensureLoaded(x ?? b.home.x, z ?? b.home.z);
+        if (x !== undefined && z !== undefined) b.place(x, waters.level, z, heading);
+        if (driving) exit(driving);
+        board(b);
+        chase.snap(yawOf(b.object.quaternion));
+      },
       /** Hand-made landmarks loaded: id, position, base and height, detail level drawn. */
       landmarks: () => map.landmarks?.() ?? [],
       /** Fix the camera at `from` looking at `at` ([x, y, z]); pass null to go back to the chase camera. */
@@ -1501,13 +1804,20 @@ async function main() {
       },
       /**
        * Back to the start: on foot at the spawn, not flying, every car on its
-       * parking spot and out of the water, the chase camera behind, the
-       * clock paused (manual). For smoke areas that run on their own (--only).
+       * parking spot and out of the water, boats back at their moorings, no skid
+       * marks, the chase camera behind, the clock paused (manual). For smoke areas that run on their own (--only).
        */
       reset: async () => {
         debugView = null;
         room.leave(true);
         if (driving) exit(driving);
+        if (boating) disembark(boating);
+        for (const b of boats) {
+          b.place(b.home.x, waters.level, b.home.z, b.home.heading);
+          b.moor();
+        }
+        settled.fill(false);
+        groundSince.fill(Infinity);
         setFlying(false);
         for (const [i, c] of cars.entries()) {
           const spot = spots[i];
@@ -1520,6 +1830,7 @@ async function main() {
         player.place(map.spawn.feet.clone(), map.spawn.heading);
         playerSoaked = null;
         upsideDownTime = 0;
+        skids.clear();
         missions?.reset();
         tweaksPanel.toggle(false);
         fullMap?.toggle(false);

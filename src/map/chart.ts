@@ -152,7 +152,19 @@ export class Chart {
     ctx.lineWidth = 2;
     ctx.strokeStyle = '#000';
     ctx.fillStyle = BLIP[blip.kind];
-    if (blip.facing !== undefined) {
+    if (blip.kind === 'boat') {
+      // A little hull, bow the way it's pointing: a boat to borrow.
+      ctx.rotate((blip.facing ?? 0) - turn);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, -7);
+      ctx.quadraticCurveTo(4, -3, 3.5, 5);
+      ctx.lineTo(-3.5, 5);
+      ctx.quadraticCurveTo(-4, -3, 0, -7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else if (blip.facing !== undefined) {
       // An arrowhead for people: you and the others in the room.
       ctx.rotate(blip.facing - turn);
       ctx.beginPath();

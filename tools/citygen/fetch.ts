@@ -27,8 +27,8 @@ export const LINZ_TILES: Record<RasterKind, string> = {
   dem: 'https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0401.tiff',
   dsm: 'https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0401.tiff',
 };
-/** Raster margin beyond the bbox, so terrain can be sampled a little past the edge. */
-const RASTER_PAD_M = 50;
+/** Raster margin beyond the bbox, so terrain can be sampled a little past the edge (and the chunk grid, which may overhang the bbox by a few tens of m, is all LiDAR). */
+const RASTER_PAD_M = 80;
 
 export type CityData = { bbox: BBox; osm: OsmData; dem: Raster; dsm: Raster };
 type Options = { refresh?: boolean; log?: (msg: string) => void };

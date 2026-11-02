@@ -21,7 +21,7 @@ export class SkidMarks {
   private readonly positions: Float32Array;
   private readonly colors: Float32Array;
   private next = 0;
-  /** Quads laid since load (for tests). */
+  /** Quads laid since load or the last clear() (for tests). */
   laid = 0;
   /** Quads changed since the last flush (inclusive), or lo > hi for none. */
   private dirtyLo = Infinity;
@@ -93,6 +93,17 @@ export class SkidMarks {
     track.right.copy(_r);
     this.dirtyLo = Math.min(this.dirtyLo, q);
     this.dirtyHi = Math.max(this.dirtyHi, q);
+  }
+
+  /** Wipe every mark (the ?debug reset: back to the start, with clean roads). */
+  clear(): void {
+    this.tracks.clear();
+    this.next = 0;
+    this.laid = 0;
+    this.dirtyLo = Infinity;
+    this.dirtyHi = -Infinity;
+    this.mesh.geometry.setDrawRange(0, 0);
+    this.mesh.visible = false;
   }
 
   /** The tyre stopped sliding; the next mark starts a new strip. */

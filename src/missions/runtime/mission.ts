@@ -17,7 +17,10 @@ export interface MissionPlayer {
   readonly x: number;
   readonly y: number;
   readonly z: number;
+  /** In a car or at a boat's helm. */
   readonly driving: boolean;
+  /** At a boat's helm (yours only: others in a room are never in one). */
+  readonly boat?: boolean;
   readonly speedKmh: number;
 }
 

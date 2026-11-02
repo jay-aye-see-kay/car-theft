@@ -31,9 +31,18 @@ export const WATER_LEVEL = 0;
 export type Grid = { x0: number; z0: number; nx: number; nz: number };
 
 /**
- * A chunk grid covering the bbox, centred on it and snapped to the sample
- * lattice (multiples of CELL_SIZE from the origin). Centring keeps the
- * overhang small on every side, so it stays inside the DEM window.
+ * Chunk edges sit on this lattice (local metres, mod CHUNK_SIZE): where they
+ * fell when the map was just the CBD, so growing the map keeps every chunk
+ * there as it was (what streams in at which detail, and the phone budget,
+ * depend on where the edges are).
+ */
+const CHUNK_ANCHOR = { x: 6, z: 126 };
+
+/**
+ * A chunk grid over the bbox, its edges on CHUNK_ANCHOR's lattice: the
+ * nearest lattice line to each west / north edge, then as many chunks as it
+ * takes to reach the east / south. Pick the bbox so the grid's overhang (or
+ * shortfall) is under the DEM window's padding on every side.
  */
 export function chunkGrid(bbox: BBox): Grid {
   const [w, s, e, n] = bbox;
@@ -42,15 +51,9 @@ export function chunkGrid(bbox: BBox): Grid {
   const maxX = Math.max(...corners.map((c) => c.x));
   const minZ = Math.min(...corners.map((c) => c.z));
   const maxZ = Math.max(...corners.map((c) => c.z));
-  const nx = Math.ceil((maxX - minX) / CHUNK_SIZE);
-  const nz = Math.ceil((maxZ - minZ) / CHUNK_SIZE);
-  const snap = (v: number) => Math.round(v / CELL_SIZE) * CELL_SIZE;
-  return {
-    x0: snap((minX + maxX) / 2 - (nx * CHUNK_SIZE) / 2),
-    z0: snap((minZ + maxZ) / 2 - (nz * CHUNK_SIZE) / 2),
-    nx,
-    nz,
-  };
+  const x0 = Math.round((minX - CHUNK_ANCHOR.x) / CHUNK_SIZE) * CHUNK_SIZE + CHUNK_ANCHOR.x;
+  const z0 = Math.round((minZ - CHUNK_ANCHOR.z) / CHUNK_SIZE) * CHUNK_SIZE + CHUNK_ANCHOR.z;
+  return { x0, z0, nx: Math.ceil((maxX - x0) / CHUNK_SIZE), nz: Math.ceil((maxZ - z0) / CHUNK_SIZE) };
 }
 
 /**

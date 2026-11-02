@@ -35,9 +35,9 @@ uniform vec3 uShallow;
 uniform vec3 uSky;
 uniform vec3 uSunColour;
 uniform vec3 uSunDir;
-/** Map bounds (minX, minZ, maxX, maxZ) and the latitude (z) south of which there's no sea outside them. */
+/** Map bounds (minX, minZ, maxX, maxZ) and the latitude (z) south of which there's no sea outside them (west, east). */
 uniform vec4 uBounds;
-uniform float uSeaSouth;
+uniform vec2 uSeaSouth;
 varying vec3 vWorld;
 #include <common>
 #include <fog_pars_fragment>
@@ -53,7 +53,7 @@ vec2 slope(vec2 p, float fw, vec2 d, float k, float s, float a) {
 void main() {
   vec2 p = vWorld.xz;
   bool outside = p.x < uBounds.x || p.y < uBounds.y || p.x > uBounds.z || p.y > uBounds.w;
-  if (outside && p.y > uSeaSouth) discard;
+  if (outside && p.y > (p.x > uBounds.z ? uSeaSouth.y : uSeaSouth.x)) discard;
 
   vec3 toEye = cameraPosition - vWorld;
   float dist = length(toEye);
@@ -91,9 +91,9 @@ export class Water {
 
   /**
    * @param bounds   the map's extent in local metres
-   * @param seaSouth outside the map, water is drawn only north of this z
+   * @param seaSouth outside the map, water is drawn only north of this z: [west and north, east]
    */
-  constructor(level: number, sky: THREE.Color, sunDir: THREE.Vector3, bounds: { minX: number; minZ: number; maxX: number; maxZ: number }, seaSouth: number) {
+  constructor(level: number, sky: THREE.Color, sunDir: THREE.Vector3, bounds: { minX: number; minZ: number; maxX: number; maxZ: number }, seaSouth: readonly [number, number]) {
     this.level = level;
     this.material = new THREE.ShaderMaterial({
       vertexShader,
@@ -109,7 +109,7 @@ export class Water {
           uSunColour: { value: new THREE.Color(0xffe2b8) },
           uSunDir: { value: sunDir.clone().normalize() },
           uBounds: { value: new THREE.Vector4(bounds.minX, bounds.minZ, bounds.maxX, bounds.maxZ) },
-          uSeaSouth: { value: seaSouth },
+          uSeaSouth: { value: new THREE.Vector2(seaSouth[0], seaSouth[1]) },
         },
       ]),
     });

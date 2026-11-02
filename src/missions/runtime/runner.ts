@@ -47,6 +47,8 @@ export interface Snapshot {
   y: number;
   z: number;
   driving: boolean;
+  /** At a boat's helm. */
+  boat?: boolean;
   speedKmh: number;
   /** The driven car's biggest knock this tick, m/s (0 on foot). */
   crash: number;
@@ -181,7 +183,7 @@ export class MissionRunner {
   tick(s: Snapshot): void {
     if (s.clock < this.asked) this.asked = -Infinity; // reset
     this.now = s.clock;
-    this.me = { id: s.id, name: s.name, x: s.x, y: s.y, z: s.z, driving: s.driving, speedKmh: s.speedKmh };
+    this.me = { id: s.id, name: s.name, x: s.x, y: s.y, z: s.z, driving: s.driving, boat: !!s.boat, speedKmh: s.speedKmh };
     this.others = s.others;
     this.guest = s.guest;
     if (this.banner && this.now > this.banner.until) this.banner = null;

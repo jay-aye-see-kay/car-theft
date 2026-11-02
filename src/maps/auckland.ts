@@ -8,7 +8,7 @@ import { Skyline } from '../city/skyline.ts';
 import { LANDMARK_MODELS } from '../landmarks/index.ts';
 import { Landmarks } from '../landmarks/landmarks.ts';
 import { Gazetteer } from '../missions/runtime/places.ts';
-import type { GameMap, ParkingSpot } from './types.ts';
+import type { GameMap, Mooring, ParkingSpot } from './types.ts';
 
 /** public/city/<area>/parking.json, written by tools/citygen/parking.ts. */
 interface CityParking {
@@ -27,11 +27,35 @@ const AREA = 'cbd';
  */
 const ATMOSPHERE = { sky: 0xc9d7e3, zenith: 0x3d74b8, fogNear: 250, fogFar: 1800, far: 2600 };
 /**
- * Outside the map, the harbour is drawn only north of this z (local metres):
- * Westhaven to the west and the port to the east, but not the suburbs
- * beyond the southern edges.
+ * Outside the map, the harbour is drawn only north of these z (local metres):
+ * Westhaven to the west, but not Ponsonby beyond it; to the east, Hobson Bay
+ * and Ōkahu Bay down to Ōrākei, but not the suburbs beyond the southern edges.
  */
-const SEA_SOUTH = 250;
+const SEA_SOUTH = [250, 1600] as const;
+/**
+ * Boats to borrow, by the wharves and marinas, each where you can step
+ * aboard from the edge (local metres; the game nudges each into deep enough
+ * water nearby). Headings: 0 east, π/2 north.
+ */
+const MOORINGS: Mooring[] = [
+  // Wynyard Quarter, by the silos and the Westhaven side.
+  { x: -1250, z: -540, heading: Math.PI / 2, kind: 'launch' },
+  { x: -1402, z: -349, heading: Math.PI / 2, kind: 'tinny' },
+  { x: -832, z: -229, heading: Math.PI / 2, kind: 'runabout' },
+  // The Viaduct.
+  { x: -712, z: -124, heading: Math.PI / 2, kind: 'tinny' },
+  { x: -600, z: -195, heading: 0, kind: 'launch' },
+  // Between the wharves: Hobson and Princes, then the ferry basin.
+  { x: -400, z: -412, heading: Math.PI / 2, kind: 'runabout' },
+  { x: -120, z: -200, heading: Math.PI / 2, kind: 'tinny' },
+  // The port's inner basin.
+  { x: 1148, z: -49, heading: Math.PI / 2, kind: 'runabout' },
+  // Mechanics Bay, below Parnell.
+  { x: 1898, z: 296, heading: 0, kind: 'runabout' },
+  { x: 1830, z: 320, heading: 0, kind: 'tinny' },
+  // Hobson Bay, at the marina on the Tamaki Drive causeway.
+  { x: 2740, z: 1110, heading: 0, kind: 'launch' },
+];
 /** Ground within this radius of the spawn is loaded before play starts. */
 const PRELOAD_RADIUS = 300;
 
@@ -134,6 +158,7 @@ export async function loadAuckland(scene: THREE.Scene, world: RAPIER.World, maxA
     places,
     roads,
     chart: { url: new URL('map.png', base), bounds: manifest.bounds },
+    moorings: MOORINGS,
     debugInfo: () => ({ ...terrain.stats(), atlasLayers: atlas.image.depth, skylineTris: skyline?.total ?? 0, skylineDrawn: skyline?.drawn ?? 0 }),
   };
 }

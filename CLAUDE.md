@@ -1,6 +1,6 @@
 # Grand Theft Auckland
 
-GTA III-flavoured driving game set in the real Auckland CBD, in the browser on
+GTA III-flavoured driving game set in the real Auckland CBD (and Parnell, out to Hobson Bay), in the browser on
 phones and desktop. Three.js + Rapier (WASM physics) + TypeScript + Vite,
 deployed to GitHub Pages. Goal and data sources: `docs/BRIEF.md`.
 
@@ -45,6 +45,16 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   waypoint, else the mission's goal; road route, re-routed off it, trimmed behind you), `style.ts` (colours,
   shared with citygen). 2D canvas, so no WebGL draw calls. `?debug`: `__game.mapState()`, `waypoint(x, z)`
   (none to clear), `openMap(open)`, `mapPoint(x, z)` (page px on the open map, to click).
+- `src/boat.ts` (`BOAT_SPECS`: tinny, runabout, launch; `BOATING` on the ? panel), `src/boat-mesh.ts` (lofted hulls,
+  one instanced call per kind in view): boats to borrow from the map's `moorings` (`src/maps/auckland.ts`). A rigid
+  body held up by buoyancy springs at five hull points under a game-time swell, an outboard at the stern, a keel
+  across; nose-up planing and banking are drawn only. At load each is settled (`settleBoats` in main.ts, a step after
+  its ground's colliders arrive) at the nearest deep, clear spot alongside dry ground, side-on, then `moor()`ed on soft
+  lines until someone takes it (and wherever they leave it). Get in from the wharf edge (`BOARD_RANGE` from the hull's
+  side); getting out steps onto dry ground within `LAND_REACH`, else over the side (fished out). Cops can't reach you
+  afloat (`flying` to them). Each client has its own; in a room others see you standing at the helm. Map blips: teal
+  hulls. `?debug`: `__game.boats()`, `besideBoat(i)`, `boardBoat(i, x?, z?, heading?)`; `state()` has `mode: 'boat'`,
+  `nearBoat`. Smoke: `boats.mjs`.
 - `src/sky.ts`, `src/sun.ts`, `src/splash.ts` (title screen with data credits)
 - **Experiments** (#53 on): v1 is a lab for finding out what's fun. Tone: cheeky, not violent (`docs/BRIEF.md`).
   - `src/tweaks.ts` + `src/tweaks-panel.ts`: the **? panel** (button by mute, `?` key), the playtest
@@ -130,7 +140,7 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   rooftop plant), `eras.ts` (facade family, colours and cornices per architectural era).
   Road graph: `roadgraph.ts` (junction-to-junction edges with lanes each way, heights from the
   smoothed ground or the deck → `roadgraph.json`; `prepare.ts` is the ground smoothing it shares with `build.ts`).
-  Map: `map.ts` (map.png, 1 m per pixel: ground classes, water, roofs, from the chunk files, no OSM needed).
+  Map: `map.ts` (map.png, `MAP_PX` 1.5 m per pixel to keep it ~6.5 MP for phones: ground classes, water, roofs, from the chunk files, no OSM needed).
   Places: `places.ts` (OSM POIs → `places.json`, marker on the kerb outside), `names.ts` (parody
   names: brand table, hand-written lists per kind, templates; no real business name may leak).
   Parks: `ground.ts` (land use, park paths, canopy cover: shade near, canopy tint far), `trees.ts` (OSM trees plus

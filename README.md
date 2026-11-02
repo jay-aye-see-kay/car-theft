@@ -3,8 +3,8 @@
 A GTA III–flavoured open-world driving game set in Auckland, running in the
 browser on phones and desktop. Three.js + Rapier physics + TypeScript + Vite.
 
-Drive and walk the real Auckland CBD, generated from OpenStreetMap and LINZ
-LiDAR. Spawn on Queen St at Aotea Square next to your purple '95. Plan:
+Drive, walk and boat round the real Auckland CBD, Parnell and the eastern
+waterfront, generated from OpenStreetMap and LINZ LiDAR. Spawn on Queen St at Aotea Square next to your purple '95. Plan:
 [docs/BRIEF.md](docs/BRIEF.md) and [issues](https://github.com/jay-aye-see-kay/grand-theft-auckland/issues).
 
 ## Play
@@ -29,6 +29,14 @@ performance overlay, `?map=test` for the old test town).
 Getting out at speed brakes to a stop first, like GTA III. You step out of
 the driver's door, which is on the right (they're NZ cars).
 
+**Boats:** tinnies, runabouts and old launches are tied up round the
+waterfront (Westhaven, Wynyard, the Viaduct, between the wharves, the port,
+Mechanics Bay and the Hobson Bay marina): the teal hull blips on the map.
+Walk to the water's edge beside one and get in the same way as a car; the
+same controls drive it (handbrake to power-slide), R rights it. Get out
+alongside a wharf to step ashore, or anywhere else to go over the side and be
+fished out.
+
 **Map:** the minimap in the top left turns with you, and shows mission
 blips (gold), your goal (pink) and the route there. Tap it (or press Tab)
 for the full map: drag and pinch or scroll to look around, tap to set a
@@ -37,7 +45,7 @@ it, tap the waypoint again to clear it.
 
 **Missions:** walk (or drive) into a gold marker to start one. Once one is
 running, the pink beam, the pink blip and the route show where to go. So far: *Handle With Care* (outside Britomart, where you
-start), *Milk Run* (K Road) and *High Tower Sprint* (bring a car).
+start), *Milk Run* (K Road), *High Tower Sprint* (bring a car) and *Harbour Dash* (at the Viaduct: borrow a boat).
 
 ## Develop
 

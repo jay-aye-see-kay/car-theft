@@ -27,7 +27,7 @@ export type Local = { x: number; z: number };
 export type BBox = [number, number, number, number];
 
 /** The CBD area for tier 1. */
-export const CBD_BBOX: BBox = [174.752, -36.861, 174.776, -36.839];
+export const CBD_BBOX: BBox = [174.7515, -36.8673, 174.8013, -36.8383];
 
 /** Britomart: the local origin. */
 export const ORIGIN: LonLat = { lon: 174.768, lat: -36.8443 };

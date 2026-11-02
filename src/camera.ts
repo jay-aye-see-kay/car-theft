@@ -18,6 +18,8 @@ export interface CameraProfile {
 
 export const DRIVING: CameraProfile = { distance: 6.5, height: 2.4, lookHeight: 1.1, lookAhead: 2, followRate: 3.5, speedPullback: 0.07 };
 export const ON_FOOT: CameraProfile = { distance: 4.2, height: 1.9, lookHeight: 1.55, lookAhead: 0.6, followRate: 1.6, speedPullback: 0.05 };
+/** At a boat's helm: further back and higher, to see the swell and the wharves coming. */
+export const BOATING_CAM: CameraProfile = { distance: 9, height: 3.2, lookHeight: 1.2, lookAhead: 4, followRate: 2.4, speedPullback: 0.08 };
 /** Flying (cheat): further back and a little above, to take in whole buildings. */
 export const FLYING: CameraProfile = { distance: 12, height: 3.5, lookHeight: 1, lookAhead: 2, followRate: 1.2, speedPullback: 0.04 };
 
@@ -32,6 +34,7 @@ const PROFILE_KNOBS: Record<keyof CameraProfile, KnobSpec> = {
 tune('camera-driving', 'Camera: driving', DRIVING, PROFILE_KNOBS);
 tune('camera-foot', 'Camera: on foot', ON_FOOT, PROFILE_KNOBS);
 tune('camera-flying', 'Camera: flying', FLYING, PROFILE_KNOBS);
+tune('camera-boat', 'Camera: boat', BOATING_CAM, PROFILE_KNOBS);
 
 /**
  * Field of view. A fixed vertical FOV makes the horizontal one grow with the
