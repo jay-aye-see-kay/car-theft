@@ -37,9 +37,9 @@ tune('camera-flying', 'Camera: flying', FLYING, PROFILE_KNOBS);
  * Field of view. A fixed vertical FOV makes the horizontal one grow with the
  * screen's width: ~87° on a 16:10 laptop but ~105° on a phone in landscape
  * (~2.2:1), which looks fish-eyed. So the horizontal FOV is capped at about
- * what a 16:9 screen gets, and wider screens get a narrower vertical one.
+ * what a 16:10 laptop gets (playtested), and wider screens get a narrower vertical one.
  */
-export const LENS = { fov: 62, maxWide: 94 };
+export const LENS = { fov: 62, maxWide: 86 };
 tune('camera-lens', 'Camera: lens', LENS, {
   fov: { label: 'Field of view (vertical)', min: 30, max: 100, step: 1, unit: '°' },
   maxWide: { label: 'Widest across', min: 50, max: 140, step: 1, unit: '°' },

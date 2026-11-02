@@ -11,9 +11,9 @@ import { knob, mechanic } from './tweaks.ts';
 // Each client runs its own (they aren't shared in rooms).
 
 export const PEDS = mechanic('peds', 'Pedestrians', true, {
-  count: knob(14, 'How many', 0, 40, 1),
-  spawnRadius: knob(70, 'Spawn within', 25, 200, 5, 'm'),
-  walkSpeed: knob(1.35, 'Walking pace', 0.5, 3, 0.05, 'm/s'),
+  count: knob(23, 'How many', 0, 40, 1),
+  spawnRadius: knob(50, 'Spawn within', 25, 200, 5, 'm'),
+  walkSpeed: knob(1.5, 'Walking pace', 0.5, 3, 0.05, 'm/s'),
   stumbleSpeed: knob(6, 'Running into them knocks you both over above', 2, 12, 0.25, 'm/s'),
 });
 
