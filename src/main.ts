@@ -5,7 +5,8 @@ import { ChaseCamera, DRIVING, FLYING, ON_FOOT, fitFov } from './camera.ts';
 import { FLY_CODE, StickCode } from './cheats.ts';
 import { TERRAIN_ONLY_QUERY } from './city/building-chunk.ts';
 import { Bubbles } from './bubbles.ts';
-import { Car, CHASSIS_HALF } from './car.ts';
+import { Car, CHASSIS_HALF, MESH_OFFSET_Y } from './car.ts';
+import { CarFleet } from './car-fleet.ts';
 import { CRASH_DIZZY, DIZZY, Dizzy, severity } from './dizzy.ts';
 import { Input } from './input.ts';
 import { CarSpeeds, HITS, inside, Peds, type CarLike } from './peds.ts';
@@ -18,6 +19,7 @@ import { TweaksPanel } from './tweaks-panel.ts';
 import { Sky } from './sky.ts';
 import { SUN_DIRECTION } from './sun.ts';
 import { Splash } from './splash.ts';
+import { PARKED_POOL, Town, TRAFFIC_POOL } from './traffic.ts';
 import { Water } from './city/water.ts';
 import { loadMap } from './maps/index.ts';
 import { MISSIONS } from './missions/index.ts';
@@ -54,8 +56,12 @@ const SOAK_CAR = 1.8;
 const SOAK_PLAYER = 1.2;
 /** How far to look for dry land to put them back on, m. */
 const SHORE_SEARCH = 300;
-/** Cars beyond this from the camera are drawn as just their body; their blob shadows go too, m. */
+/** Cars beyond this from the camera lose their blob shadows, m. */
 const CAR_DETAIL = 120;
+/** And beyond this they're drawn as just their body: the wheels are half a car's triangles, and a few pixels by here, m. */
+const CAR_WHEELS = 40;
+/** Beyond this, a low-poly stand-in with the same silhouette, m. */
+const CAR_FAR = 80;
 /** Cars beyond this are not drawn at all (a few pixels in the haze), m. */
 const CAR_DRAW = 600;
 /** Default names in a room, with a number on the end. */
@@ -144,15 +150,27 @@ async function main() {
   const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false });
   const carShadow = new THREE.PlaneGeometry(4.6, 2.1).rotateX(-Math.PI / 2);
 
-  const cars = map.parking.map((spot) => {
+  // The map's parked cars, then (with a road graph) the town's pools: traffic
+  // and more parked cars (src/traffic.ts), put out and taken away round the player.
+  const spots = [...map.parking];
+  const fixedCars = spots.length;
+  if (map.roads) {
+    for (let i = 0; i < TRAFFIC_POOL + PARKED_POOL; i++) spots.push({ pos: new THREE.Vector3(i * 6, -300, 0), heading: 0, pitch: 0, roll: 0, paint: 0xffffff });
+  }
+  const cars = spots.map((spot) => {
     const car = new Car(world, spot.pos, spot.heading, spot.paint, spot.pitch, spot.roll);
-    scene.add(car.object);
-    const shadow = new THREE.Mesh(carShadow, shadowMat);
-    shadow.name = 'shadow';
-    scene.add(shadow);
     /** Game time it went into the water, or null if it's dry. */
-    return { car, shadow, frozen: false, soaked: null as number | null };
+    return { car, frozen: false, soaked: null as number | null };
   });
+  const town = map.roads ? new Town({ roads: map.roads, heightAt: (x, z) => map.heightAt(x, z), hasGround: (x, z) => map.hasGround(x, z) }, cars.slice(fixedCars).map((c) => c.car)) : null;
+  // Every car in four draw calls (bodies, lamps, wheels, shadows), and a stand-in to pose each shadow.
+  const fleet = new CarFleet(cars.length, shadowMat, carShadow, MESH_OFFSET_Y);
+  scene.add(fleet.group);
+  const shadowPose = new THREE.Object3D();
+  const carList = cars.map((c) => c.car);
+  const carEntry = new Map(cars.map((c) => [c.car, c]));
+  /** Not in the world this frame: frozen until the ground streams in, or one of the town's not out. */
+  const frozenCar = (car: Car) => carEntry.get(car)!.frozen || !!town?.idle(car);
 
   // Start on foot by the driver's door (right-hand drive) of the purple Corolla.
   const player = new Player(world, map.spawn.feet, map.spawn.heading);
@@ -246,7 +264,7 @@ async function main() {
     let best: Car | null = null;
     let bestD = ENTER_RANGE;
     for (const { car } of cars) {
-      if (remotes.drives(car)) continue;
+      if (remotes.drives(car) || town?.idle(car)) continue;
       const d = car.object.position.distanceTo(player.position);
       if (d < bestD && Math.abs(car.forwardSpeed()) < 3) {
         best = car;
@@ -274,6 +292,9 @@ async function main() {
 
   const enter = (car: Car) => {
     setFlying(false);
+    // One of the town's cars: it's yours now, and if someone was driving it they're out on the road.
+    const driver = town?.take(car);
+    if (driver && peds) peds.turfOut(driver.x, driver.z, driver.heading, player.position);
     driving = car;
     exitRequested = false;
     player.setActive(false);
@@ -469,7 +490,7 @@ async function main() {
   const _n = new THREE.Vector3();
   const _yawQ = new THREE.Quaternion();
   const shadowRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, down);
-  const placeShadow = (shadow: THREE.Mesh, from: THREE.Vector3, yaw: number, exclude: RAPIER.Collider, reach: number) => {
+  const placeShadow = (shadow: THREE.Object3D, from: THREE.Vector3, yaw: number, exclude: RAPIER.Collider, reach: number) => {
     shadowRay.origin = { x: from.x, y: from.y, z: from.z };
     const hit = world.castRayAndGetNormal(shadowRay, reach, true, undefined, undefined, exclude);
     shadow.visible = !!hit;
@@ -683,15 +704,22 @@ async function main() {
         makeSplash(p.x, p.z, 0.5, true);
       } else if (playerSoaked !== null && clock - playerSoaked > SOAK_PLAYER) fishOutPlayer();
     } else if (driving) playerSoaked = null;
+    // The town's traffic and parked cars: out of sight ones come and go, and the drivers decide what to do.
+    if (town) {
+      const focus = debugView ? _p.fromArray(debugView.from) : driving ? driving.object.position : player.position;
+      const walker = !driving && !player.flying ? player.position : null;
+      town.step(frameDt, focus, chase.yaw, { cars: carList, absent: (car) => frozenCar(car), walker }, (car) => car === driving || remotes.drives(car));
+    }
     // Freeze anything standing on ground that hasn't streamed in yet, rather
-    // than let it fall through the world.
+    // than let it fall through the world (and the town's cars not out right now).
     for (const c of cars) {
       const p = c.car.body.translation();
       const remote = remotes.drives(c.car);
-      const frozen = !remote && !map.hasGround(p.x, p.z);
+      const idle = !remote && !!town?.idle(c.car);
+      const frozen = !remote && (idle || !map.hasGround(p.x, p.z));
       if (frozen !== c.frozen) c.car.body.setEnabled(!frozen);
       c.frozen = frozen;
-      if (!remote && lost(p)) rescue(c.car);
+      if (!remote && !idle && lost(p)) rescue(c.car);
     }
     // The physics body, not the interpolated model, which sits at the origin until the first render.
     const feet = player.body.translation();
@@ -716,7 +744,7 @@ async function main() {
       for (const { car, frozen } of cars) {
         if (frozen) continue;
         // Parked, or someone else driving it on our screen (their controls just turn its wheels).
-        if (car !== driving) car.update(remotes.controlsFor(car), FIXED_DT);
+        if (car !== driving) car.update(remotes.controlsFor(car) ?? town?.controlsFor(car) ?? null, FIXED_DT);
         // Like GTA III: asking to get out at speed brakes to a stop first.
         else if (exitRequested) car.update({ throttle: 0, brake: Math.abs(car.forwardSpeed()) > 1 ? 1 : 0, steer: 0, handbrake: false }, FIXED_DT);
         else car.update(dizzyDrive, FIXED_DT);
@@ -751,14 +779,9 @@ async function main() {
     alpha ??= accumulator / FIXED_DT;
     /** The driven car's knock this frame, for missions. */
     let crash = 0;
-    for (const [n, { car, shadow }] of cars.entries()) {
+    for (const [n, { car, frozen }] of cars.entries()) {
+      if (frozen && town?.idle(car)) continue;
       car.render(alpha);
-      const seen = car.object.position.distanceTo(camera.position);
-      car.setDetail(seen, CAR_DETAIL, CAR_DRAW);
-      if (seen < CAR_DETAIL) {
-        const yaw = _euler.setFromQuaternion(car.object.quaternion, 'YXZ').y;
-        placeShadow(shadow, car.object.position, yaw, car.collider, 2.6);
-      } else shadow.visible = false;
 
       // Skid marks from any sliding car, not just the one we're in.
       for (let i = 0; i < 4; i++) {
@@ -866,6 +889,7 @@ async function main() {
     skyDome.follow(camera);
     water?.update(camera, clock);
     camera.updateMatrixWorld();
+    drawCars();
     remotes.render(alpha, frameDt, camera);
     bubbles.update(peds ? peds.list.filter((p) => p.saysFor > 0).map((p) => ({ x: p.x, y: p.y + BUBBLE_LIFT, z: p.z, text: p.says })) : [], camera);
     room.tick(clock);
@@ -876,6 +900,24 @@ async function main() {
       camera.updateMatrixWorld();
       missionHud.update(view, camera, focus, map.heightAt);
     }
+  };
+
+  /** Every car in view into the fleet's instanced meshes: the whole car near, just the body further out, shadows within CAR_DETAIL. */
+  const drawCars = () => {
+    fleet.begin(camera);
+    for (const { car, frozen } of cars) {
+      if (frozen && town?.idle(car)) continue;
+      const seen = car.object.position.distanceTo(camera.position);
+      if (seen > CAR_DRAW || !fleet.inView(car.object.position)) continue;
+      let shadow: THREE.Object3D | null = null;
+      if (seen < CAR_DETAIL) {
+        const yaw = _euler.setFromQuaternion(car.object.quaternion, 'YXZ').y;
+        placeShadow(shadowPose, car.object.position, yaw, car.collider, 2.6);
+        if (shadowPose.visible) shadow = shadowPose;
+      }
+      fleet.add(car, seen < CAR_WHEELS ? 2 : seen < CAR_FAR ? 1 : 0, shadow);
+    }
+    fleet.end();
   };
 
   const applyDebugView = () => {
@@ -975,7 +1017,12 @@ async function main() {
         paused,
         dizzy: dizzy.active,
         peds: peds?.list.length ?? 0,
-        cars: cars.map(({ car }) => car.object.position.toArray()),
+        /** The map's parked cars (the town's are in town()). */
+        cars: cars.slice(0, fixedCars).map(({ car }) => car.object.position.toArray()),
+        /** The town's cars out: driving themselves, and parked or left about. */
+        traffic: town ? town.list.filter((t) => t.kind === 'driving').length : 0,
+        townCars: town ? town.list.filter((t) => t.kind !== 'idle').length : 0,
+        carsDrawn: fleet.drawn,
         audio: audio.state,
         fps,
         /** Draw calls and triangles in the last rendered frame. */
@@ -1023,7 +1070,8 @@ async function main() {
         scene.traverseVisible((o) => {
           if (!(o instanceof THREE.Mesh) || (o.frustumCulled && !frustum.intersectsObject(o))) return;
           const g = o.geometry as THREE.BufferGeometry;
-          const count = Math.min(g.index ? g.index.count : g.attributes.position.count, g.drawRange.count);
+          // Instanced meshes (every car is one) draw their geometry once per instance.
+          const count = Math.min(g.index ? g.index.count : g.attributes.position.count, g.drawRange.count) * (o instanceof THREE.InstancedMesh ? o.count : 1);
           const kind = (o.name || 'unnamed').split(' ')[0];
           const e = (out[kind] ??= { meshes: 0, tris: 0 });
           e.meshes++;
@@ -1126,6 +1174,8 @@ async function main() {
       leaveRoom: () => room.leave(),
       /** Whether each parked car is being driven by someone else in the room (kinematic on our screen). */
       remoteCars: () => cars.map(({ car }) => remotes.drives(car)),
+      /** The town's cars that are out (src/traffic.ts): `index` is into the pools, which start at car `first`. */
+      town: () => ({ first: fixedCars, cars: town?.debug() ?? [], stats: town?.stats ?? null }),
       /** Missions: what's on screen (banner, subtitle, timer, goal, start markers), how the last one ended, everything said. */
       missions: () => missions?.debugState() ?? null,
       /** Start a mission by id where the player is, abandoning any running one. */
@@ -1233,7 +1283,7 @@ async function main() {
         if (driving) exit(driving);
         setFlying(false);
         for (const [i, c] of cars.entries()) {
-          const spot = map.parking[i];
+          const spot = spots[i];
           c.car.place(spot.pos.clone(), spot.heading, spot.pitch, spot.roll);
           c.car.body.setLinearDamping(0.05);
           c.car.body.setAngularDamping(0.6);
@@ -1248,6 +1298,7 @@ async function main() {
         resetValues();
         dizzy.reset();
         peds?.reset(1);
+        town?.reset();
         carSpeeds.reset();
         hitPlayerAt.fill(-Infinity);
         eased.x = eased.z = eased.steer = 0;

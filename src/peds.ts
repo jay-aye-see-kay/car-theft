@@ -11,9 +11,9 @@ import { knob, mechanic } from './tweaks.ts';
 // Each client runs its own (they aren't shared in rooms).
 
 export const PEDS = mechanic('peds', 'Pedestrians', true, {
-  count: knob(14, 'How many', 0, 40, 1),
-  spawnRadius: knob(70, 'Spawn within', 25, 200, 5, 'm'),
-  walkSpeed: knob(1.35, 'Walking pace', 0.5, 3, 0.05, 'm/s'),
+  count: knob(23, 'How many', 0, 40, 1),
+  spawnRadius: knob(50, 'Spawn within', 25, 200, 5, 'm'),
+  walkSpeed: knob(1.5, 'Walking pace', 0.5, 3, 0.05, 'm/s'),
   stumbleSpeed: knob(6, 'Running into them knocks you both over above', 2, 12, 0.25, 'm/s'),
 });
 
@@ -335,6 +335,22 @@ export class Peds {
     p.pinned = true;
     this.relink(p);
     this.list.push(p);
+    return p;
+  }
+
+  /**
+   * A driver turfed out of their car (you took it): standing on the road at
+   * (x, z), facing `heading`, and they have something to say about it.
+   */
+  turfOut(x: number, z: number, heading: number, player: { x: number; z: number }): Ped | null {
+    if (!PEDS.on) return null;
+    const snap = this.w.roads.nearest(x, z, { within: 80, open: false });
+    if (!snap) return null;
+    const p = this.make(snap.edge, 1, 0, snap.left ? 1 : -1, x, z);
+    p.heading = heading;
+    this.relink(p);
+    this.list.push(p);
+    this.react(p, player);
     return p;
   }
 

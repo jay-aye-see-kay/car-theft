@@ -41,11 +41,11 @@ const cabinProfile: [number, number][] = [
   [0.22, 1.16],
 ];
 
-function extrude(points: [number, number][], depth: number): THREE.BufferGeometry {
+function extrude(points: [number, number][], depth: number, bevel = true): THREE.BufferGeometry {
   const shape = new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y)));
   const geo = new THREE.ExtrudeGeometry(shape, {
     depth,
-    bevelEnabled: true,
+    bevelEnabled: bevel,
     bevelThickness: 0.04,
     bevelSize: 0.04,
     bevelSegments: 1,
@@ -68,24 +68,34 @@ function box(
   return m;
 }
 
-export interface CorollaModel {
-  root: THREE.Group;
-  /** Brake lights, so the car can light them up. */
-  brakeLights: THREE.MeshStandardMaterial;
+export interface CorollaGeometry {
+  /**
+   * Everything but the lamps, in the car's frame with y = 0 at the underside.
+   * Vertex colours, and a `paint` attribute (1 on painted panels) so one
+   * instanced mesh can paint every car its own colour.
+   */
+  body: THREE.BufferGeometry;
+  /** Head, indicator and tail lamps; `paint` is 1 on the tail lamps, which light up when braking. */
+  lamps: THREE.BufferGeometry;
 }
 
-export function buildCorolla(paintColor = COROLLA.paint): CorollaModel {
+const PAINT = new THREE.MeshStandardMaterial();
+const BRAKE = new THREE.MeshStandardMaterial({ color: 0xb01010 });
+
+/** The car built once and baked for instancing (src/car-fleet.ts draws every car from it). */
+export function buildCorolla(): CorollaGeometry {
   const root = new THREE.Group();
   root.name = 'corolla';
 
-  const paint = new THREE.MeshStandardMaterial({ color: paintColor, metalness: 0.5, roughness: 0.35 });
-  const glass = new THREE.MeshStandardMaterial({ color: 0x1b2430, metalness: 0.2, roughness: 0.1 });
-  const trim = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8 });
-  const chrome = new THREE.MeshStandardMaterial({ color: 0xcfd3d6, metalness: 0.9, roughness: 0.25 });
-  const headlight = new THREE.MeshStandardMaterial({ color: 0xfff6d8, emissive: 0xfff1c0, emissiveIntensity: 0.6 });
-  const amber = new THREE.MeshStandardMaterial({ color: 0xffa020, emissive: 0x803000, emissiveIntensity: 0.4 });
-  const brakeLights = new THREE.MeshStandardMaterial({ color: 0xb01010, emissive: 0xff1010, emissiveIntensity: 0.15 });
-
+  // The paint is the instance's colour; white here, so painted parts read as such before it's applied.
+  const paint = PAINT;
+  const glass = new THREE.MeshStandardMaterial({ color: 0x1b2430 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xcfd3d6 });
+  const headlight = new THREE.MeshStandardMaterial({ color: 0xfff6d8 });
+  const amber = new THREE.MeshStandardMaterial({ color: 0xffa020 });
+  const brakeLights = BRAKE;
+  const lamps = [headlight, amber, brakeLights];
   const halfW = COROLLA.width / 2;
 
   // Body and glasshouse. The cabin is narrower than the body (tumblehome).
@@ -135,57 +145,70 @@ export function buildCorolla(paintColor = COROLLA.paint): CorollaModel {
     }
   }
 
-  // ~35 parts would be ~35 draw calls per car; bake them down to 4.
-  const body = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.35, roughness: 0.45 });
-  return { root: bake(root, [headlight, amber, brakeLights], body), brakeLights };
+  // ~35 parts would be ~35 draw calls per car; bake them down to two
+  // geometries that every car shares, instanced.
+  return {
+    body: bakeGeometry(root, (m) => !lamps.includes(m as THREE.MeshStandardMaterial), (m) => (m === paint ? 1 : 0)),
+    lamps: bakeGeometry(root, (m) => lamps.includes(m as THREE.MeshStandardMaterial), (m) => (m === brakeLights ? 1 : 0)),
+  };
+}
+
+/**
+ * The same silhouette for cars far off, ~50 triangles instead of ~350: the
+ * body and glasshouse with no bevels, trim or lamps, and dark boxes where
+ * the wheels are.
+ */
+export function buildCorollaFar(): THREE.BufferGeometry {
+  const root = new THREE.Group();
+  root.add(new THREE.Mesh(extrude(bodyProfile, COROLLA.width - 0.04, false), PAINT));
+  root.add(new THREE.Mesh(extrude(cabinProfile, COROLLA.width - 0.3, false), new THREE.MeshStandardMaterial({ color: 0x1b2430 })));
+  return bakeGeometry(root, () => true, (m) => (m === PAINT ? 1 : 0));
 }
 
 /** One wheel: tyre plus hubcap, spinning about its local z axis. */
-export function buildWheel(): THREE.Group {
+export function buildWheel(): THREE.BufferGeometry {
   const wheel = new THREE.Group();
   const tyre = new THREE.Mesh(
     new THREE.CylinderGeometry(COROLLA.wheelRadius, COROLLA.wheelRadius, COROLLA.wheelWidth, 14),
-    new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 }),
+    new THREE.MeshStandardMaterial({ color: 0x151515 }),
   );
   tyre.rotation.x = Math.PI / 2;
   wheel.add(tyre);
   const hub = new THREE.Mesh(
     new THREE.CylinderGeometry(0.19, 0.19, COROLLA.wheelWidth + 0.02, 8),
-    new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.7, roughness: 0.35 }),
+    new THREE.MeshStandardMaterial({ color: 0xb8bcc0 }),
   );
   hub.rotation.x = Math.PI / 2;
   wheel.add(hub);
   // A spoke so you can see the wheels turn.
   const spoke = new THREE.Mesh(
     new THREE.BoxGeometry(0.34, 0.05, COROLLA.wheelWidth + 0.04),
-    new THREE.MeshStandardMaterial({ color: 0x55595d, metalness: 0.5, roughness: 0.5 }),
+    new THREE.MeshStandardMaterial({ color: 0x55595d }),
   );
   wheel.add(spoke);
-  return bake(wheel, [], wheelMaterial);
+  return bakeGeometry(wheel, () => true, () => 0);
 }
 
-const wheelMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.4, roughness: 0.6 });
-
 /**
- * Merge a group of meshes into one mesh per listed material, plus one mesh
- * for everything else with each part's colour baked into vertex colours.
+ * Merge the group's meshes whose material passes `take` into one geometry,
+ * with each part's colour baked into vertex colours and `paint` per vertex.
  */
-function bake(group: THREE.Group, keep: THREE.Material[], rest: THREE.Material): THREE.Group {
+function bakeGeometry(group: THREE.Group, take: (m: THREE.Material) => boolean, paint: (m: THREE.Material) => number): THREE.BufferGeometry {
   group.updateMatrixWorld(true);
-  const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const geos: THREE.BufferGeometry[] = [];
   group.traverse((o) => {
     if (!(o instanceof THREE.Mesh)) return;
     const mat = o.material as THREE.MeshStandardMaterial;
+    if (!take(mat)) return;
     let g = o.geometry.clone().applyMatrix4(o.matrixWorld);
     if (g.index) g = g.toNonIndexed();
     g.deleteAttribute('uv');
-    const colors = new Float32Array(g.attributes.position.count * 3);
+    const n = g.attributes.position.count;
+    const colors = new Float32Array(n * 3);
     for (let i = 0; i < colors.length; i += 3) mat.color.toArray(colors, i);
     g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const target = keep.includes(mat) ? mat : rest;
-    buckets.set(target, [...(buckets.get(target) ?? []), g]);
+    g.setAttribute('paint', new THREE.BufferAttribute(new Float32Array(n).fill(paint(mat)), 1));
+    geos.push(g);
   });
-  const out = new THREE.Group();
-  for (const [mat, geos] of buckets) out.add(new THREE.Mesh(mergeGeometries(geos), mat));
-  return out;
+  return mergeGeometries(geos);
 }

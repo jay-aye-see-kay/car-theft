@@ -122,8 +122,9 @@ export async function loadAuckland(scene: THREE.Scene, world: RAPIER.World, maxA
     nearest: (x, z, maxDist, ok) => terrain.nearest(x, z, maxDist, ok),
     // Performance budgets (CLAUDE.md) are measured from these three views.
     views: {
-      // Street level outside Britomart (where the game used to start), looking west along Customs St.
-      spawn: { from: [-8, 2.5, 22], at: [-120, 3, 12] },
+      // Street level outside Britomart (where the game used to start), looking west along Customs St,
+      // turned a touch south to keep the Sky Tower in frame on the narrower lens (camera.ts LENS).
+      spawn: { from: [-8, 2.5, 22], at: [-120, 3, 28] },
       // Halfway up Queen St, looking uphill towards Wellesley St.
       'queen-st': { from: [-170, 2.5, 220], at: [-245, 6, 494] },
       // Over the harbour, looking across the whole CBD towards K Road.

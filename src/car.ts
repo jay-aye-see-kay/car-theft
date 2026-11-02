@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
-import { buildCorolla, buildWheel, COROLLA } from './corolla.ts';
+import { COROLLA } from './corolla.ts';
 import { tune } from './tweaks.ts';
 
 export interface DriveControls {
@@ -65,8 +65,8 @@ tune('car', 'Car handling', TUNING, {
 
 // Chassis collider, centred on the body's rigid body origin.
 export const CHASSIS_HALF = { x: COROLLA.length / 2 - 0.05, y: 0.3, z: COROLLA.width / 2 - 0.04 };
-// Where the body mesh sits relative to the rigid body (its underside).
-const MESH_OFFSET_Y = -0.38;
+/** Where the body mesh sits relative to the rigid body (its underside); src/car-fleet.ts draws it there. */
+export const MESH_OFFSET_Y = -0.38;
 const WHEEL_CONNECTION_Y = -0.1;
 
 const FRONT = [0, 1];
@@ -86,13 +86,14 @@ export class Car {
   readonly body: RAPIER.RigidBody;
   readonly collider: RAPIER.Collider;
   readonly vehicle: RAPIER.DynamicRayCastVehicleController;
+  /** The car's interpolated pose (and its wheels'), for drawing: no meshes, src/car-fleet.ts draws every car. */
   readonly object = new THREE.Group();
+  readonly paint: THREE.Color;
+  /** Brake lights on (for drawing). */
+  brakeLit = false;
 
   private readonly wheelPivots: THREE.Group[] = [];
-  /** Wheels and lamp meshes: hidden at a distance, where only the body is worth a draw call. */
-  private readonly details: THREE.Object3D[] = [];
   private readonly wheelSpinners: THREE.Group[] = [];
-  private readonly brakeLights: THREE.MeshStandardMaterial;
   private steerAngle = 0;
   private braking = false;
   private handbrake = false;
@@ -118,7 +119,8 @@ export class Car {
       RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(spawn.x, spawn.y, spawn.z)
         .setRotation(rotation)
-        .setCanSleep(false)
+        // Parked cars sleep once they've settled (a bump wakes them); see update().
+        .setCanSleep(true)
         // Building walls are thin trimesh sheets: CCD stops a fast car tunnelling through one.
         .setCcdEnabled(true)
         .setAngularDamping(0.6)
@@ -145,27 +147,14 @@ export class Car {
     this.applyTuning();
     ALL.add(this);
 
-    const model = buildCorolla(paint);
-    model.root.position.y = MESH_OFFSET_Y;
-    this.object.add(model.root);
-    this.brakeLights = model.brakeLights;
-    const parts = model.root.children as THREE.Mesh[];
-    const size = (m: THREE.Mesh) => m.geometry.attributes.position.count;
-    const body = parts.reduce((a, b) => (size(b) > size(a) ? b : a));
-    for (const m of parts) {
-      m.name = 'car';
-      if (m !== body) this.details.push(m);
-    }
-
+    this.paint = new THREE.Color(paint);
     for (const p of wheelPositions) {
       const pivot = new THREE.Group();
       pivot.position.set(p.x, p.y, p.z);
-      const spinner = buildWheel();
+      const spinner = new THREE.Group();
       pivot.add(spinner);
       this.object.add(pivot);
-      spinner.traverse((o) => (o.name = 'car'));
       this.wheelPivots.push(pivot);
-      this.details.push(pivot);
       this.wheelSpinners.push(spinner);
     }
 
@@ -203,14 +192,9 @@ export class Car {
     }
   }
 
-  /**
-   * Level of detail by distance from the camera: the whole car (1 + 7 draw
-   * calls) up close, just the body further out, nothing past `far`.
-   */
-  setDetail(distance: number, near: number, far: number): void {
-    this.object.visible = distance < far;
-    const detailed = distance < near;
-    if (this.details[0].visible !== detailed) for (const d of this.details) d.visible = detailed;
+  /** Wheel i's world matrix as last rendered. */
+  wheelMatrix(i: number): THREE.Matrix4 {
+    return this.wheelSpinners[i].matrixWorld;
   }
 
   /** Signed speed along the car's nose, m/s. */
@@ -229,6 +213,13 @@ export class Car {
    * Pass null for a parked car with nobody in it: brakes on, wheels straight.
    */
   update(driver: DriveControls | null, dt: number): void {
+    // Parked and settled: nothing to do until something knocks it (dozens of
+    // parked cars cost next to nothing). Anyone driving keeps it awake.
+    if (!driver && this.body.isSleeping()) {
+      this.brakeLit = false;
+      return;
+    }
+    if (driver && this.body.isSleeping()) this.body.wakeUp();
     const controls = driver ?? IDLE;
     // Rapier keeps user forces between steps, so clear last step's first.
     this.body.resetForces(true);
@@ -277,7 +268,7 @@ export class Car {
       const drag = vel.multiplyScalar(-TUNING.dragCoefficient * s);
       this.body.addForce({ x: drag.x, y: drag.y - TUNING.downforce * s * s, z: drag.z }, true);
     }
-    this.brakeLights.emissiveIntensity = this.braking || controls.handbrake ? 1.4 : 0.15;
+    this.brakeLit = this.braking || controls.handbrake;
     v.updateVehicle(dt);
   }
 
@@ -316,6 +307,7 @@ export class Car {
       this.wheelPivots[i].rotation.y = this.vehicle.wheelSteering(i) ?? 0;
       this.wheelSpinners[i].rotation.z = -(this.vehicle.wheelRotation(i) ?? 0);
     }
+    this.object.updateMatrixWorld(true);
   }
 
   /** Put the car back on its wheels where it is, facing the same way, never below `groundY`. */
