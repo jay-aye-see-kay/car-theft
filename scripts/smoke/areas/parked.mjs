@@ -1,4 +1,5 @@
-// Parked cars: posed at the kerb from OSM data (public/city/cbd/parking.json).
+// Parked cars: posed at the kerb from OSM data (public/city/cbd/parking.json),
+// or half up on it where they'd block the lane traffic drives in.
 // Each one, once its chunk has streamed in, should sit on its wheels on the
 // road (not hovering, sunk or inside a building) and stay put.
 
@@ -10,7 +11,11 @@ export default {
     const parked = await page.evaluate(() => fetch('city/cbd/parking.json').then((r) => r.json()));
     check(parked.cars.length >= 6, `${parked.cars.length} cars parked round the CBD`);
     const bad = [];
-    for (const [i, c] of parked.cars.entries()) {
+    // Where the game puts them: some half up on the kerb, clear of the lane traffic drives in (src/traffic.ts onKerb).
+    const spots = await game('parking');
+    const onKerb = spots.filter((s) => s.kerb).length;
+    for (const [i, json] of parked.cars.entries()) {
+      const c = { ...json, x: spots[i].pos[0], z: spots[i].pos[2] };
       const here = await game('probe', c.x, c.z);
       // Look at it from the kerb behind: this also keeps its chunk streamed in.
       const fx = Math.cos(c.heading);
@@ -29,10 +34,10 @@ export default {
       const clear = pose.pos[1] - here.ground;
       const drift = Math.hypot(pose.pos[0] - c.x, pose.pos[2] - c.z);
       const roofed = here.top !== null && here.top - here.ground > 0.5;
-      const ok = !pose.frozen && clear > 0.4 && clear < 0.9 && pose.up > 0.97 && drift < 0.5 && !roofed && ['road', 'paving'].includes(here.surface);
+      const ok = !pose.frozen && clear > 0.4 && clear < 0.9 && pose.up > 0.97 && drift < 0.5 && !roofed && ['road', 'paving', ...(spots[i].kerb ? ['footpath', 'urban'] : [])].includes(here.surface);
       if (!ok) bad.push(`${c.osm} ${c.name}: clearance ${clear.toFixed(2)}, up ${pose.up.toFixed(3)}, drift ${drift.toFixed(2)}, ${here.surface}${roofed ? ', under a roof' : ''}${pose.frozen ? ', frozen' : ''}`);
     }
-    check(bad.length === 0, `parked cars sit on the road at the kerb (${parked.cars.length - bad.length}/${parked.cars.length})${bad.length ? ': ' + bad.join('; ') : ''}`);
+    check(bad.length === 0, `parked cars sit at the kerb, ${onKerb} half up on it (${parked.cars.length - bad.length}/${parked.cars.length})${bad.length ? ': ' + bad.join('; ') : ''}`);
     await game('lookFrom', null, [0, 0, 0]);
   },
 };

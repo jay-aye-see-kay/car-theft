@@ -19,6 +19,11 @@ export class GameAudio {
   private skidGain!: GainNode;
   private skidFilter!: BiquadFilterNode;
   private noise!: AudioBuffer;
+  private sirenOsc!: OscillatorNode;
+  private sirenLfo!: OscillatorNode;
+  private sirenDepth!: GainNode;
+  private sirenGain!: GainNode;
+  private sirenYelp = false;
   private lastImpact = 0;
   private muted = false;
   private paused = false;
@@ -89,6 +94,78 @@ export class GameAudio {
     this.skidGain.gain.value = 0;
     skidSrc.connect(this.skidFilter).connect(this.skidGain).connect(this.master);
     skidSrc.start();
+
+    // Siren: a square wave swept up and down by a slow LFO (the wail), or a
+    // fast one up close (the yelp), through a speaker-ish band-pass.
+    this.sirenOsc = ctx.createOscillator();
+    this.sirenOsc.type = 'square';
+    this.sirenOsc.frequency.value = 950;
+    this.sirenLfo = ctx.createOscillator();
+    this.sirenLfo.type = 'triangle';
+    this.sirenLfo.frequency.value = 0.42;
+    this.sirenDepth = ctx.createGain();
+    this.sirenDepth.gain.value = 380;
+    this.sirenLfo.connect(this.sirenDepth).connect(this.sirenOsc.frequency);
+    const horn = ctx.createBiquadFilter();
+    horn.type = 'bandpass';
+    horn.frequency.value = 1100;
+    horn.Q.value = 0.9;
+    this.sirenGain = ctx.createGain();
+    this.sirenGain.gain.value = 0;
+    this.sirenOsc.connect(horn).connect(this.sirenGain).connect(this.master);
+    this.sirenOsc.start();
+    this.sirenLfo.start();
+  }
+
+  /**
+   * The nearest siren, every frame: `volume` 0..1 by distance (0 for none),
+   * yelping when it's right on you.
+   */
+  setSiren(volume: number, yelp: boolean): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.sirenGain.gain.setTargetAtTime(Math.min(1, volume) * 0.07, t, 0.15);
+    if (yelp !== this.sirenYelp) {
+      this.sirenYelp = yelp;
+      this.sirenLfo.frequency.setTargetAtTime(yelp ? 3.6 : 0.42, t, 0.1);
+      this.sirenDepth.gain.setTargetAtTime(yelp ? 300 : 380, t, 0.1);
+    }
+  }
+
+  /**
+   * A cop on the car's loudspeaker: a few buzzy syllables through a tinny
+   * band-pass ("Pull over, mate"). `volume` 0..1 by distance, `syllables` from the line.
+   */
+  megaphone(volume: number, syllables: number): void {
+    if (!this.ctx || volume <= 0.02) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const n = Math.max(2, Math.min(9, syllables));
+    const len = n * 0.17;
+    const voice = ctx.createOscillator();
+    voice.type = 'sawtooth';
+    voice.frequency.setValueAtTime(135, t);
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    // One bump of loudness per syllable, the pitch nodding along.
+    for (let i = 0; i < n; i++) {
+      const at = t + i * 0.17;
+      out.gain.exponentialRampToValueAtTime(0.55 * Math.min(1, volume), at + 0.04);
+      out.gain.exponentialRampToValueAtTime(0.08 * Math.min(1, volume), at + 0.15);
+      voice.frequency.setValueAtTime(130 + ((i * 37) % 50), at);
+    }
+    out.gain.exponentialRampToValueAtTime(0.0001, t + len + 0.05);
+    const tin = ctx.createBiquadFilter();
+    tin.type = 'bandpass';
+    tin.frequency.value = 1500;
+    tin.Q.value = 2.2;
+    const formant = ctx.createBiquadFilter();
+    formant.type = 'peaking';
+    formant.frequency.value = 700;
+    formant.gain.value = 9;
+    voice.connect(formant).connect(tin).connect(out).connect(this.master);
+    voice.start(t);
+    voice.stop(t + len + 0.08);
   }
 
   toggleMute(): boolean {

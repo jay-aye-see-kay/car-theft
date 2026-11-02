@@ -8,6 +8,9 @@ export default {
   core: false,
   page: 'auckland',
   async run({ page, check, game, state, step, press, shot }) {
+    // The police pool drives about like traffic; it's counted in cops.mjs.
+    const noCops = () => game('knob', 'cops.on', false);
+    await noCops();
     const knobs = await game('knobs');
     const near = (a, b) => Math.hypot(a[0] - b[0], a[2] - b[2]);
 
@@ -44,7 +47,7 @@ export default {
     await shot('30-traffic');
 
     // Stand in the road in front of one: it stops short of you.
-    const pick = driving().filter((c) => c.left > 50 && c.speed > 4 && c.ahead).sort((a, b) => a.index - b.index)[0];
+    const pick = driving().filter((c) => c.left > 35 && c.speed > 4 && c.ahead).sort((a, b) => a.index - b.index)[0];
     check(!!pick, `a car with a straight run ahead to stand in front of (${pick?.street || pick?.edge})`);
     if (!pick) return;
     await game('placePlayer', pick.ahead[0], pick.ahead[1], pick.heading + Math.PI);

@@ -5,11 +5,11 @@ import { ChaseCamera, DRIVING, FLYING, ON_FOOT, fitFov } from './camera.ts';
 import { FLY_CODE, StickCode } from './cheats.ts';
 import { TERRAIN_ONLY_QUERY } from './city/building-chunk.ts';
 import { Bubbles } from './bubbles.ts';
-import { Car, CHASSIS_HALF, MESH_OFFSET_Y } from './car.ts';
+import { Car, carRotation, CHASSIS_HALF, MESH_OFFSET_Y } from './car.ts';
 import { CarFleet } from './car-fleet.ts';
 import { CRASH_DIZZY, DIZZY, Dizzy, severity } from './dizzy.ts';
 import { Input } from './input.ts';
-import { CarSpeeds, HITS, inside, Peds, type CarLike } from './peds.ts';
+import { CarSpeeds, HITS, inside, Peds, type CarLike, type Ped } from './peds.ts';
 import { PedsMesh } from './peds-mesh.ts';
 import { Player } from './player.ts';
 import { SkidMarks } from './skids.ts';
@@ -19,7 +19,11 @@ import { TweaksPanel } from './tweaks-panel.ts';
 import { Sky } from './sky.ts';
 import { SUN_DIRECTION } from './sun.ts';
 import { Splash } from './splash.ts';
-import { PARKED_POOL, Town, TRAFFIC_POOL } from './traffic.ts';
+import { onKerb, PARKED_POOL, PATROL_POOL, Town, TRAFFIC_POOL } from './traffic.ts';
+import { Cops, type Suspect } from './cops/cops.ts';
+import { CopsHud } from './cops/hud.ts';
+import { CopsMesh } from './cops/cops-mesh.ts';
+import { RemoteCops } from './cops/remote-cops.ts';
 import { Water } from './city/water.ts';
 import { loadMap } from './maps/index.ts';
 import { MISSIONS } from './missions/index.ts';
@@ -77,6 +81,11 @@ const HIT_COOLDOWN = 1;
 const BUBBLE_LIFT = 2.25;
 /** "Oi!" fades out by this far from the camera, m. */
 const BARK_RANGE = 60;
+/** Tickets from the cops, kept between visits (the running joke). */
+const TICKETS_KEY = 'gta.tickets';
+/** The siren's heard out to this far, m, and yelps inside this. */
+const SIREN_RANGE = 260;
+const SIREN_YELP = 25;
 /** The minimap shows this far to its rim on foot, m, and this much more per m/s, up to the most. */
 const MAP_RADIUS = 160;
 const MAP_RADIUS_PER_MS = 6;
@@ -160,19 +169,35 @@ async function main() {
 
   // The map's parked cars, then (with a road graph) the town's pools: traffic
   // and more parked cars (src/traffic.ts), put out and taken away round the player.
-  const spots = [...map.parking];
+  const spots = map.parking.map((spot) => {
+    // Where one blocks the lane traffic drives in, it goes half up on the kerb instead.
+    const kerb = map.roads && onKerb(map.roads, spot.pos.x, spot.pos.z, spot.heading);
+    return kerb ? { ...spot, pos: new THREE.Vector3(kerb.x, spot.pos.y + 0.05, kerb.z), kerb: true } : { ...spot, kerb: false };
+  });
   const fixedCars = spots.length;
   if (map.roads) {
-    for (let i = 0; i < TRAFFIC_POOL + PARKED_POOL; i++) spots.push({ pos: new THREE.Vector3(i * 6, -300, 0), heading: 0, pitch: 0, roll: 0, paint: 0xffffff });
+    for (let i = 0; i < TRAFFIC_POOL + PARKED_POOL + PATROL_POOL; i++) spots.push({ pos: new THREE.Vector3(i * 6, -300, 0), heading: 0, pitch: 0, roll: 0, paint: 0xffffff, kerb: false });
   }
   const cars = spots.map((spot) => {
     const car = new Car(world, spot.pos, spot.heading, spot.paint, spot.pitch, spot.roll);
     /** Game time it went into the water, or null if it's dry. */
     return { car, frozen: false, soaked: null as number | null };
   });
-  const town = map.roads ? new Town({ roads: map.roads, heightAt: (x, z) => map.heightAt(x, z), hasGround: (x, z) => map.hasGround(x, z) }, cars.slice(fixedCars).map((c) => c.car)) : null;
-  // Every car in four draw calls (bodies, lamps, wheels, shadows), and a stand-in to pose each shadow.
-  const fleet = new CarFleet(cars.length, shadowMat, carShadow, MESH_OFFSET_Y);
+  // The last pool is the police's (light bars, sirens: src/cops/).
+  if (map.roads) for (const { car } of cars.slice(cars.length - PATROL_POOL)) car.police = true;
+  const parkShape = new RAPIER.Cuboid(CHASSIS_HALF.x + 0.1, 0.45, CHASSIS_HALF.z + 0.1);
+  /** A wall, post or tree trunk where a car would park (its chassis from 0.5 m up, so not the ground or a kerb). */
+  const parkBlocked = (x: number, y: number, z: number, heading: number) => {
+    let hit = false;
+    world.intersectionsWithShape({ x, y: y + 0.95, z }, carRotation(heading), parkShape, () => !(hit = true), RAPIER.QueryFilterFlags.ONLY_FIXED);
+    return hit;
+  };
+  const town = map.roads
+    ? new Town({ roads: map.roads, heightAt: (x, z) => map.heightAt(x, z), hasGround: (x, z) => map.hasGround(x, z), blocked: parkBlocked }, cars.slice(fixedCars).map((c) => c.car))
+    : null;
+  // Others' cops in a room (kinematic stand-ins), then every car in a few instanced draw calls, and a stand-in to pose each shadow.
+  const remoteCops = new RemoteCops(world);
+  const fleet = new CarFleet(cars.length + remoteCops.capacity, shadowMat, carShadow, MESH_OFFSET_Y);
   scene.add(fleet.group);
   const shadowPose = new THREE.Object3D();
   const carList = cars.map((c) => c.car);
@@ -200,6 +225,10 @@ async function main() {
   const pedsMesh = new PedsMesh(shadowMat);
   scene.add(pedsMesh.mesh, pedsMesh.shadows);
   const carSpeeds = new CarSpeeds();
+  // The cops (#54): Auckland only, like the traffic (they drive its roads and walk its footpaths).
+  const cops = peds && town && map.roads ? new Cops({ roads: map.roads, world, peds, town, heightAt: (x, z) => map.heightAt(x, z) }) : null;
+  const copsMesh = new CopsMesh();
+  scene.add(copsMesh.group);
   const carLikes: CarLike[] = cars.map(({ car }) => ({ body: car.body, half: CHASSIS_HALF, player: false }));
   /** When each car last hit the player on foot, game s. */
   const hitPlayerAt = cars.map(() => -Infinity);
@@ -249,6 +278,8 @@ async function main() {
   const roomPanel = new RoomPanel(hud, room);
   roomPanel.onRename = (name) => storage?.setItem(NAME_KEY, name);
   const bubbles = new Bubbles(hud);
+  const copsHud = new CopsHud(hud);
+  copsHud.onSkip = () => cops?.skip();
   // The ? panel and the full map: the game pauses while either is open.
   let paused = false;
   const tweaksPanel = new TweaksPanel(hud);
@@ -270,6 +301,7 @@ async function main() {
   const input = new Input(app);
   input.attachLook(renderer.domElement);
   const audio = new GameAudio();
+  if (cops) cops.tickets = Number(storage?.getItem(TICKETS_KEY)) || 0;
 
   let driving: Car | null = null;
   let exitRequested = false;
@@ -281,7 +313,7 @@ async function main() {
     let best: Car | null = null;
     let bestD = ENTER_RANGE;
     for (const { car } of cars) {
-      if (remotes.drives(car) || town?.idle(car)) continue;
+      if (remotes.drives(car) || town?.idle(car) || cops?.occupied(car)) continue;
       const d = car.object.position.distanceTo(player.position);
       if (d < bestD && Math.abs(car.forwardSpeed()) < 3) {
         best = car;
@@ -309,6 +341,9 @@ async function main() {
 
   const enter = (car: Car) => {
     setFlying(false);
+    // Someone else's car in view of a cop is an offence; any swap unseen throws them off.
+    cops?.stolen(car);
+    cops?.enteredCar(car === cars[0].car);
     // One of the town's cars: it's yours now, and if someone was driving it they're out on the road.
     const driver = town?.take(car);
     if (driver && peds) peds.turfOut(driver.x, driver.z, driver.heading, player.position);
@@ -462,6 +497,7 @@ async function main() {
         q: roundQuat(r.x, r.y, r.z, r.w),
         v: roundVec(v.x, v.y, v.z),
         d: exitRequested ? [0, 0, 1, 0] : [round2(d.steer), round2(d.throttle), round2(d.brake), d.handbrake ? 1 : 0],
+        ...cops?.share(),
       };
     }
     const p = player.position;
@@ -473,6 +509,7 @@ async function main() {
       v: roundVec(Math.cos(h) * player.speed, 0, -Math.sin(h) * player.speed),
       g: player.isGrounded ? 1 : 0,
       f: player.flying ? 1 : 0,
+      ...cops?.share(),
     };
   };
 
@@ -596,6 +633,72 @@ async function main() {
   /** Manual mode: draw on the next animation frame (for a screenshot). */
   let drawRequested = false;
 
+  /** You, as the cops see you: the car's centre and velocity driving, your feet on foot. */
+  const suspect = (): Suspect => {
+    if (driving) {
+      const t = driving.body.translation();
+      const v = driving.body.linvel();
+      return { x: t.x, y: t.y, z: t.z, heading: _euler.setFromQuaternion(driving.object.quaternion, 'YXZ').y, vx: v.x, vz: v.z, car: driving, flying: false, skid: driving.skid };
+    }
+    const b = player.body.translation();
+    const h = player.heading;
+    return { x: b.x, y: b.y - 0.9, z: b.z, heading: h, vx: Math.cos(h) * player.speed, vz: -Math.sin(h) * player.speed, car: null, flying: player.flying, skid: 0 };
+  };
+
+  /** What the cops did this frame: tackles, catching you and letting you go, loudspeakers and shouts, spikes. */
+  const copEvents = () => {
+    if (!cops) return;
+    for (const e of cops.events) {
+      const near = (x: number, z: number, range: number) => Math.max(0, 1 - Math.hypot(x - camera.position.x, z - camera.position.z) / range);
+      if (e.kind === 'tackle') {
+        if (driving) continue;
+        player.knock(e.vx, 3, e.vz, 1.2);
+        dizzy.trigger(0.6, 'hit');
+        audio.impact(0.5);
+        chase.shake(0.5);
+      } else if (e.kind === 'caught') {
+        // Out of the car (you'd be pulled out anyway), and the slip.
+        if (driving) exit(driving);
+        const yours = e.car === cars[0].car || !e.car;
+        copsHud.showTicket(e.line, e.ticket, e.tickets, !yours);
+        storage?.setItem(TICKETS_KEY, String(e.tickets));
+        audio.cue('failed');
+      } else if (e.kind === 'released') {
+        copsHud.hideTicket();
+        // Someone else's car: towed.
+        const c = e.car;
+        if (c && c !== cars[0].car) {
+          if (town?.owns(c)) town.dismiss(c);
+          else {
+            const i = cars.findIndex((k) => k.car === c);
+            if (i >= 0) c.place(spots[i].pos.clone(), spots[i].heading, spots[i].pitch, spots[i].roll);
+          }
+          roomPanel.toast('They towed the car');
+        }
+      } else if (e.kind === 'megaphone') audio.megaphone(near(e.x, e.z, 90), e.syllables);
+      else if (e.kind === 'shout') audio.bark(near(e.x, e.z, BARK_RANGE), 0.7);
+      else if (e.kind === 'spiked') {
+        if (e.car === driving) {
+          audio.impact(0.45);
+          roomPanel.toast('Flat tyres!');
+        }
+      } else if (e.kind === 'gave-up') roomPanel.toast("They've given up on you");
+    }
+    cops.events.length = 0;
+  };
+
+  /** Bikes under the officers riding them (and others'), bikes they came off, spikes and cones. */
+  const drawCopProps = (alpha: number, theirs: readonly Ped[]) => {
+    if (!cops) return copsMesh.update(theirs.filter((p) => p.bike), [], [], [], alpha, camera.position);
+    const riders = [...(peds?.list.filter((p) => p.bike) ?? []), ...theirs.filter((p) => p.bike)];
+    const strips = cops.roadblocks.map((r) => ({ x: r.x, y: r.y, z: r.z, heading: r.heading, from: r.spikeFrom, to: r.spikeTo }));
+    const cones = cops.cones.filter((c) => c.busy).map((c) => {
+      const t = c.body.translation();
+      return { x: t.x, y: t.y, z: t.z, q: c.body.rotation() };
+    });
+    copsMesh.update(riders, cops.dropped, strips, cones, alpha, camera.position);
+  };
+
   /**
    * Every fixed tick after the physics step: landings and car hits make you
    * dizzy (and knock you flying), and the pedestrians walk, get hit and react.
@@ -659,8 +762,10 @@ async function main() {
       audio.toggleMute();
       setMuteIcon();
     }
-    const nearby = driving ? null : nearestCar();
-    if (input.consume('enterExit')) {
+    /** Caught: no getting away (or in) while they have a word. */
+    const held = !!cops?.scene;
+    const nearby = driving || held ? null : nearestCar();
+    if (input.consume('enterExit') && !held) {
       if (driving) exitRequested = true;
       else if (nearby) enter(nearby);
     }
@@ -668,7 +773,7 @@ async function main() {
       resetCar(driving);
       chase.snap();
     }
-    const jump = input.consume('jump');
+    const jump = input.consume('jump') && !held;
 
     // Dizzy: wiggling the stick or mashing jump / handbrake shakes it off sooner.
     dizzy.update(frameDt, input.moveX, input.moveY, jump ? 1 : 0, !!driving);
@@ -681,8 +786,9 @@ async function main() {
 
     // Camera-relative movement on foot: stick up walks away from the camera.
     const cy = chase.yaw + drift;
-    let moveX = (Math.cos(cy) * input.moveY - Math.sin(cy) * input.moveX) * slow;
-    let moveZ = (Math.sin(cy) * input.moveY + Math.cos(cy) * input.moveX) * slow;
+    const stick = held ? 0 : 1;
+    let moveX = (Math.cos(cy) * input.moveY - Math.sin(cy) * input.moveX) * slow * stick;
+    let moveZ = (Math.sin(cy) * input.moveY + Math.cos(cy) * input.moveX) * slow * stick;
     if (daze > 0) {
       // Staggering about even with hands off the stick.
       moveX += Math.cos(dizzyT * 0.9) * 0.3 * daze * DIZZY.mush;
@@ -692,7 +798,7 @@ async function main() {
     eased.z += (moveZ - eased.z) * ease;
     moveX = eased.x;
     moveZ = eased.z;
-    const sprint = input.sprint && daze === 0;
+    const sprint = input.sprint && daze === 0 && !held;
     eased.steer += (input.drive.steer - eased.steer) * ease;
     Object.assign(dizzyDrive, input.drive, {
       steer: THREE.MathUtils.clamp(eased.steer + drift * 0.6, -1, 1),
@@ -728,6 +834,11 @@ async function main() {
       const walker = !driving && !player.flying ? player.position : null;
       town.step(frameDt, focus, chase.yaw, { cars: carList, absent: (car) => frozenCar(car), walker }, (car) => car === driving || remotes.drives(car));
     }
+    // The cops: who sees you, heat, who's after you and what they do (before the physics, like the traffic).
+    if (cops && started) {
+      cops.step(frameDt, suspect(), chase.yaw, { cars: carList, absent: (car) => frozenCar(car), walker: !driving && !player.flying ? player.position : null });
+      copEvents();
+    }
     // Freeze anything standing on ground that hasn't streamed in yet, rather
     // than let it fall through the world (and the town's cars not out right now).
     for (const c of cars) {
@@ -759,10 +870,11 @@ async function main() {
     while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
       // Game time at the end of this step.
       remotes.beforeStep(clock - accumulator + FIXED_DT, drivingIndex, room.myId, !driving);
+      remoteCops.beforeStep(remotes.cops());
       for (const { car, frozen } of cars) {
         if (frozen) continue;
         // Parked, or someone else driving it on our screen (their controls just turn its wheels).
-        if (car !== driving) car.update(remotes.controlsFor(car) ?? town?.controlsFor(car) ?? null, FIXED_DT);
+        if (car !== driving) car.update(remotes.controlsFor(car) ?? cops?.controlsFor(car) ?? town?.controlsFor(car) ?? null, FIXED_DT);
         // Like GTA III: asking to get out at speed brakes to a stop first.
         else if (exitRequested) car.update({ throttle: 0, brake: Math.abs(car.forwardSpeed()) > 1 ? 1 : 0, steer: 0, handbrake: false }, FIXED_DT);
         else car.update(dizzyDrive, FIXED_DT);
@@ -772,6 +884,7 @@ async function main() {
       for (const { car, frozen } of cars) if (!frozen) car.afterStep(FIXED_DT);
       if (!driving) player.afterStep();
       remotes.afterStep();
+      remoteCops.afterStep(FIXED_DT);
       afterTick(drivingIndex);
       accumulator -= FIXED_DT;
       steps++;
@@ -855,8 +968,10 @@ async function main() {
       const at = driving ? driving.object.position : player.position;
       stars.add(at.x, at.y + (driving ? 1.25 : 1.95), at.z, daze, clock);
     }
+    const theirOfficers = remoteCops.people(remotes.cops(), frameDt);
     if (peds) {
-      pedsMesh.update(peds.list, alpha, frameDt, camera.position, (x, y, z, a, t) => stars.add(x, y, z, a, t));
+      cops?.pedEvents(peds.events);
+      pedsMesh.update(theirOfficers.length ? [...peds.list, ...theirOfficers] : peds.list, alpha, frameDt, camera.position, (x, y, z, a, t) => stars.add(x, y, z, a, t));
       for (const e of peds.events) {
         const near = 1 - _p.set(e.x, e.y, e.z).distanceTo(camera.position) / BARK_RANGE;
         if (e.kind === 'hit') {
@@ -868,6 +983,15 @@ async function main() {
       peds.events.length = 0;
     } else pedsMesh.update([], alpha, frameDt, camera.position, () => {});
     stars.end();
+    // The cops' props (bikes, spikes, cones), the siren, and the heat on the HUD.
+    remoteCops.render(alpha);
+    drawCopProps(alpha, theirOfficers);
+    {
+      let d = cops ? cops.sirenDistance(camera.position) : Infinity;
+      for (const car of remoteCops.cars()) if (car.siren) d = Math.min(d, car.object.position.distanceTo(camera.position));
+      audio.setSiren(Math.max(0, 1 - d / SIREN_RANGE) ** 1.5, d < SIREN_YELP);
+    }
+    if (cops) copsHud.update(cops.level, cops.seen, cops.tickets);
 
     // Missions run on physics poses, not interpolated ones, so stepped tests replay exactly.
     if (missions && started) {
@@ -909,7 +1033,10 @@ async function main() {
     camera.updateMatrixWorld();
     drawCars();
     remotes.render(alpha, frameDt, camera);
-    bubbles.update(peds ? peds.list.filter((p) => p.saysFor > 0).map((p) => ({ x: p.x, y: p.y + BUBBLE_LIFT, z: p.z, text: p.says })) : [], camera);
+    bubbles.update([
+      ...(peds ? peds.list.filter((p) => p.saysFor > 0).map((p) => ({ x: p.x, y: p.y + BUBBLE_LIFT, z: p.z, text: p.says })) : []),
+      ...(cops?.speakers() ?? []),
+    ], camera);
     room.tick(clock);
     if (missions) {
       const view = missions.view();
@@ -967,7 +1094,8 @@ async function main() {
   /** Every car in view into the fleet's instanced meshes: the whole car near, just the body further out, shadows within CAR_DETAIL. */
   const drawCars = () => {
     fleet.begin(camera);
-    for (const { car, frozen } of cars) {
+    fleet.time = clock;
+    for (const { car, frozen } of [...cars, ...remoteCops.cars().map((car) => ({ car, frozen: false }))]) {
       if (frozen && town?.idle(car)) continue;
       const seen = car.object.position.distanceTo(camera.position);
       if (seen > CAR_DRAW || !fleet.inView(car.object.position)) continue;
@@ -1080,6 +1208,13 @@ async function main() {
         paused,
         dizzy: dizzy.active,
         peds: peds?.list.length ?? 0,
+        /** The cops: heat level 0-3, seen right now, being given a talking-to. */
+        heat: cops?.level ?? 0,
+        seen: cops?.seen ?? false,
+        caught: !!cops?.scene,
+        /** Seconds of flat tyres left on the car you're in. */
+        flat: driving?.flat ?? 0,
+        ticketShown: copsHud.ticketShown,
         /** The map's parked cars (the town's are in town()). */
         cars: cars.slice(0, fixedCars).map(({ car }) => car.object.position.toArray()),
         /** The town's cars out: driving themselves, and parked or left about. */
@@ -1217,6 +1352,8 @@ async function main() {
         if (index < 0) player.place(p, player.heading);
         else cars[index].car.place(p, 0);
       },
+      /** Where the map's parked cars are put: parking.json's spots, some moved half up on the kerb (`kerb`). */
+      parking: () => spots.slice(0, fixedCars).map((p) => ({ pos: p.pos.toArray(), heading: p.heading, kerb: !!p.kerb })),
       /** Parked cars' poses: position and up vector's y (1 = level). */
       carPoses: () => cars.map(({ car, frozen }) => ({
         pos: car.object.position.toArray(),
@@ -1235,6 +1372,8 @@ async function main() {
         return room.join(code);
       },
       leaveRoom: () => room.leave(),
+      /** Others' chase cars as we see them (src/cops/remote-cops.ts): position and siren. */
+      remoteCopCars: () => remoteCops.cars().map((car) => ({ pos: car.object.position.toArray(), siren: car.siren })),
       /** Whether each parked car is being driven by someone else in the room (kinematic on our screen). */
       remoteCars: () => cars.map(({ car }) => remotes.drives(car)),
       /** The town's cars that are out (src/traffic.ts): `index` is into the pools, which start at car `first`. */
@@ -1286,6 +1425,31 @@ async function main() {
         await map.ensureLoaded(x, z);
         return peds?.spawnAt(x, z, heading)?.id ?? null;
       },
+      /** The cops (src/cops/cops.ts): heat, who's out and what they're doing, roadblocks, totals; and their props drawn. */
+      cops: () => (cops ? { ...cops.debug(), drawn: copsMesh.drawn } : null),
+      /** Straight to this much heat (1 per level), as if a cop just saw you. */
+      setHeat: (heat: number) => {
+        const p = suspect();
+        cops?.setHeat(heat, p);
+        return cops?.level ?? 0;
+      },
+      /**
+       * An officer ('foot' or 'bike') standing at (x, z) facing `heading`, or a
+       * police car ('car') on the nearest lane; `chasing` sets them after you
+       * (else they stand and watch). Returns whether one appeared.
+       */
+      spawnCop: async (kind: 'foot' | 'bike' | 'car', x: number, z: number, heading = 0, chasing = false) => {
+        await map.ensureLoaded(x, z);
+        return cops?.spawnAt(kind, x, z, heading, chasing) ?? false;
+      },
+      /** Spikes and cones on the road ahead of you now (as at level 3), or null if there's no road. */
+      roadblock: () => {
+        const p = suspect();
+        const r = cops?.placeRoadblock(p, Math.max(8, Math.hypot(p.vx, p.vz)));
+        return r ? { pos: [r.x, r.y, r.z], heading: r.heading, spikes: [r.spikeFrom, r.spikeTo], cones: r.cones.length } : null;
+      },
+      /** Tap the ticket slip (skip the talking-to). */
+      skipCaught: () => cops?.skip(),
       /** Every ? panel value by section, or set one: knob('dizzy.on', false), knob('peds.count', 4). */
       knobs: () => allValues(),
       knob: (path: string, value: number | boolean) => {
@@ -1363,6 +1527,8 @@ async function main() {
         mapRadius = MAP_RADIUS;
         resetValues();
         dizzy.reset();
+        cops?.reset();
+        copsHud.hideTicket();
         peds?.reset(1);
         town?.reset();
         carSpeeds.reset();

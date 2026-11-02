@@ -68,8 +68,33 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
     cars (so indices match in rooms; someone driving one takes it over everywhere). Traffic drives the road
     graph on the left (outside lane on multi-lane roads), mostly straight on at junctions, slows for corners,
     keeps a gap, stops for you on foot, pulls out round stopped cars; no lights. More parked cars on kerbside
-    spots found from the road graph. Both appear out of view and go once far off and out of sight. Get into a
-    driving one and its driver is turfed out (`Peds.turfOut`). Each client runs its own.
+    spots found from the road graph: half up on the kerb (`ON_KERB`) wherever the kerbside lane is one traffic
+    drives in (one lane that way, or the right of a one-way), checked clear of walls and posts; the map's own
+    parked cars are moved the same way at load (`onKerb`), and pedestrians walk further out (`KERB_GAP` 2 m).
+    Both appear out of view and go once far off and out of sight. Get into a driving one and its driver is
+    turfed out (`Peds.turfOut`). Each client runs its own. A third pool, `PATROL_POOL`, is the police cars
+    (white, light bar): they drive about like traffic until the cops `hold()` one for a chase, then `release()` it.
+  - `src/cops/` (`COPS`, #54): cops who catch and annoy you, never hurt you. `cops.ts`: heat only from what a cop
+    sees (a ray against fixed colliders within `sightRange`, inside `sightAngle` unless chasing, always within
+    10 m): hitting someone (`heatPed`), hitting a cop or ramming their car (`heatCop`), taking a car that isn't
+    the purple one (`heatCar`), hooning or skids (`heatHoon`/s), running from them (`heatFlee`/s). Level = whole
+    heat, 0–3 (`MAX_LEVEL`). Out of everyone's sight for `decay` s drops a level; swapping cars unseen drops one;
+    `maxChase` (0 off) ends it. Level 1: `foot` officers chase you (pedestrians with `role: 'cop'`, kept by the
+    cops; `bikes` share on bicycles), tackling within `tackleRange` (dizzy, then caught). Level 2: `cars2` patrol
+    cars, level 3: `cars3`, each with a role (tail: alongside then cut in; front; back; side), along a road
+    route when far or out of sight, straight at you when close; pull up round you when you stop; their officer
+    gets out if you're on foot; siren and loudspeaker lines. Level 3 also lays roadblocks every `roadblockEvery`
+    s on the road ahead: spikes on one half (flat tyres: `Car.flat`, `spikeSlow`, `flatTime`), knockable cones
+    (`ColliderDesc.cone`, pooled) on the other. Caught (tackled, an officer at the door of your stopped car, or
+    boxed in: stopped within 7.5 m of a chase car for `boxTime`): a talking-to (`lines.ts`, Kiwi), a ticket
+    (tally in localStorage `gta.tickets`), someone else's car towed, heat cleared, `IMMUNE` 5 s. Ambient: `beat`
+    officers walking the footpaths and `patrols` cars driving about. `hud.ts`: beacons under the speedo (flash
+    while seen), "Tickets: n", the ticket slip (tap or Enter to skip). `cops-mesh.ts`: bikes, spike strips,
+    cones (an instanced call each, only when there's one). `audio.setSiren()` / `megaphone()`. Rooms: each
+    client runs the cops after its own player and sends them in its pose (`w` level, `k` chase cars, `u`
+    officers; `PROTOCOL` 3); `remote-cops.ts` shows others' as kinematic cars (they block ours) and officers.
+    `?debug`: `__game.cops()`, `setHeat(n)`, `spawnCop('foot' | 'bike' | 'car', x, z, heading, chasing)`,
+    `roadblock()`, `skipCaught()`, `remoteCopCars()`, `parking()`; `state()` has `heat`, `seen`, `caught`, `flat`.
 - `src/maps/`: `auckland.ts` (default) and `test-town.ts` (`?map=test`)
 - `src/missions/`: one file per mission (`defineMission`, picked up by `import.meta.glob`).
   `runtime/`: `mission.ts` (the script API), `runner.ts` (runs scripts in game time; a mission
@@ -112,10 +137,12 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   LiDAR treetops on green ground and tree-shaped ones over footpaths), `barriers.ts` (park edges: walls, fences,
   hedges, retaining walls, and a default low hedge where a park meets a footpath).
 - `scripts/smoke/` (Playwright: `run.mjs`, one file per area; the map in `map.mjs`), `scripts/sim-car.ts`. Experiments:
-  `dizzy.mjs`, `peds.mjs`, `traffic.mjs`, `tweaks.mjs` (the panel on the phone page); hooks `__game.dizzy()`, `peds()`, `town()`,
+  `dizzy.mjs`, `peds.mjs`, `traffic.mjs`, `cops.mjs`, `tweaks.mjs` (the panel on the phone page); hooks `__game.dizzy()`, `peds()`, `town()`,
   `spawnPed(x, z)`, `knobs()`, `knob('dizzy.on', false)`, `dropPlayer(m)`, `hitPlayer(car, speed)`.
-  `__game.reset()` also resets every knob, reseeds the pedestrians and takes the town's cars away. Areas that
-  drive scripted routes turn traffic off (`knob('traffic.on', false)`, as `drive.mjs` does).
+  `__game.reset()` also resets every knob, reseeds the pedestrians and takes the town's cars away (and the
+  cops: heat, officers, chase cars, tickets). Areas that drive scripted routes turn traffic off
+  (`knob('traffic.on', false)`, as `drive.mjs` does); areas that count people or cars turn the cops off
+  (`knob('cops.on', false)`: officers are pedestrians, patrol cars drive like traffic).
 
 ## Conventions
 
@@ -143,7 +170,8 @@ Measured at `__game.view('spawn' | 'queen-st' | 'aerial')` with `?debug`
 | Aerial | < 300k | < 100 |
 
 Street view is ~140–148k / ~40 today (a visible mission marker is one call; pedestrians are
-two calls and ~170 triangles each, dizzy stars one call when anyone's dizzy; cars are five calls however many,
+two calls and ~170 triangles each, dizzy stars one call when anyone's dizzy; police light bars one call when a
+police car's in view, bikes, spike strips and cones one each when there are any; cars are five calls however many,
 ~820 triangles each within 40 m, ~350 to 80 m, ~50 beyond; street view varies a few k with traffic in it). Each chunk is one draw call: put new static
 geometry into `ChunkMesh` (vertex colours, shared materials/atlas), not new
 meshes. Small building detail goes in `MeshBuilder.detail()`: near-only

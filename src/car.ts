@@ -91,6 +91,18 @@ export class Car {
   readonly paint: THREE.Color;
   /** Brake lights on (for drawing). */
   brakeLit = false;
+  /** A police car: drawn with a light bar on the roof (src/car-fleet.ts), flashing while `siren`. */
+  police = false;
+  siren = false;
+  /**
+   * Flat tyres from road spikes (src/cops/): seconds left, the share of the
+   * engine lost and how much the steering wobbles. No damage, just slow and
+   * wobbly until they wear off.
+   */
+  flat = 0;
+  flatSlow = 0.5;
+  flatWobble = 0.5;
+  private flatClock = 0;
 
   private readonly wheelPivots: THREE.Group[] = [];
   private readonly wheelSpinners: THREE.Group[] = [];
@@ -230,7 +242,14 @@ export class Car {
     // Speed-sensitive steering, eased towards the target angle.
     const speedFactor = Math.min(absSpeed / TUNING.topSpeed, 1);
     const maxSteer = THREE.MathUtils.lerp(TUNING.maxSteer, TUNING.minSteer, Math.sqrt(speedFactor));
-    const target = -controls.steer * maxSteer; // positive steering turns left
+    let target = -controls.steer * maxSteer; // positive steering turns left
+    if (this.flat > 0) {
+      // Flat tyres pull this way and that.
+      this.flat = Math.max(0, this.flat - dt);
+      this.flatClock += dt;
+      const wob = this.flatWobble * Math.min(1, absSpeed / 8);
+      target += (Math.sin(this.flatClock * 5.3) * 0.6 + Math.sin(this.flatClock * 2.1 + 1) * 0.4) * 0.09 * wob;
+    }
     this.steerAngle += (target - this.steerAngle) * Math.min(1, TUNING.steerSpeed * dt * 2);
     for (const i of FRONT) v.setWheelSteering(i, this.steerAngle);
 
@@ -244,6 +263,11 @@ export class Car {
     if (controls.brake > 0) {
       if (speed > 1) brake = Math.max(brake, TUNING.brakeForce * controls.brake);
       else if (speed > -TUNING.topSpeed * 0.3) engine = -TUNING.reverseForce * controls.brake;
+    }
+    if (this.flat > 0) {
+      // Rims on the road: less go, and a much lower top speed.
+      engine *= 1 - this.flatSlow;
+      if (speed > TUNING.topSpeed * (1 - this.flatSlow) * 0.6 && engine > 0) engine = 0;
     }
     if (!driver) brake = TUNING.brakeForce;
     this.throttle = engine > 0 ? controls.throttle : 0;
@@ -320,6 +344,7 @@ export class Car {
 
   place(pos: THREE.Vector3, heading: number, pitch = 0, roll = 0): void {
     const q = carRotation(heading, pitch, roll);
+    this.flat = 0;
     this.body.setTranslation(pos, true);
     this.body.setRotation(q, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);

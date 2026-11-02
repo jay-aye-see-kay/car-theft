@@ -4,7 +4,7 @@
 import type { SharedMission } from '../missions/runtime/runner.ts';
 
 /** Bump when messages change shape, so old tabs get "please reload" instead of nonsense. */
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 /** Including the host. */
 export const MAX_PLAYERS = 6;
 
@@ -29,6 +29,14 @@ export interface Pose {
   d?: [number, number, number, number];
   /** Flying (cheat). */
   f?: number;
+  /**
+   * The cops after this player (src/cops/cops.ts share()): their heat
+   * level, chase cars [x, y, z, qx, qy, qz, qw, siren] and chasing
+   * officers [x, y, z, heading, bike, running]. Their client runs them.
+   */
+  w?: number;
+  k?: [number, number, number, number, number, number, number, number][];
+  u?: [number, number, number, number, number, number][];
 }
 
 export interface Member {

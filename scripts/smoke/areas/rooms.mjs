@@ -67,6 +67,22 @@ export default {
     const gLag = seen ? dist(seen.at, gAt) : Infinity;
     check(dist(gBefore, gAt) > 3 && gLag < 1, `the host sees the guest walk (${dist(gBefore, gAt).toFixed(1)} m, off by ${gLag.toFixed(2)} m)`, loose);
 
+    // The host has the cops after them: the guest sees their chase car, siren and all, where the host has it.
+    await game('knob', 'cops.foot', 0);
+    await game('setHeat', 2);
+    let hostCop = null;
+    for (let i = 0; i < 40 && !hostCop; i++) {
+      await step(15);
+      hostCop = (await game('cops')).cars[0]?.pos ?? null;
+    }
+    await settle();
+    hostCop = (await game('cops')).cars[0]?.pos ?? null;
+    await gStep(1);
+    const theirs = await g('remoteCopCars');
+    const copLag = hostCop && theirs[0] ? dist(hostCop, theirs[0].pos) : Infinity;
+    check(!!hostCop && theirs.length === 1 && theirs[0].siren && copLag < 3,
+      `the guest sees the host's chase car with its siren on (off by ${copLag.toFixed(2)} m)`, loose);
+
     // The guest leaves: the host is a room of one again.
     await g('leaveRoom');
     await page.waitForFunction(() => window.__game.room().members.length === 1, null, { timeout: 5000 }).catch(() => {});
