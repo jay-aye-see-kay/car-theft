@@ -74,8 +74,33 @@ export default {
     let kmh = 0;
     await run({ keys: ['KeyW'], max: 300, every: 2, sample: (s) => (kmh = Math.max(kmh, s.speedKmh)), until: (s) => s.dizzy });
     d = await game('dizzy');
-    check(d.dizzy && d.cause === 'crash', `a big crash (${kmh.toFixed(0)} km/h into a wall) makes the driver dizzy (${d.cause})`);
+    check(d.dizzy && d.cause === 'crash' && d.total < 4, `a crash at ${kmh.toFixed(0)} km/h into a wall makes the driver dizzy for a short while (${d.total.toFixed(1)} s)`);
     await shot('21-dizzy-crash');
+
+    // Flat out (180 km/h) into the same shopfronts: 10 s or more, full strength for the first 5,
+    // and steering left and right to get going again doesn't shake it off.
+    await game('reset');
+    await getIn();
+    await game('teleportCar', 0, -190.3, 257.1, Math.atan2(-0.25, 0.97));
+    await step(30);
+    await game('launchCar', 0, 180 / 3.6);
+    await run({ max: 60, every: 1, until: (s) => s.dizzy });
+    const big = await game('dizzy');
+    const amountAt = async (seconds) => {
+      for (let done = 0; done < seconds * 60; done += 12) {
+        const key = (done / 12) % 2 ? 'KeyA' : 'KeyD';
+        await page.keyboard.down(key);
+        await step(12);
+        await page.keyboard.up(key);
+      }
+      return game('dizzy');
+    };
+    const at4 = await amountAt(4.5);
+    const at6 = await amountAt(1.5);
+    const at9 = await amountAt(3);
+    check(big.cause === 'crash' && big.total >= 10 && big.total <= 15, `a 180 km/h crash makes the driver dizzy for ${big.total.toFixed(1)} s`);
+    check(at4.amount === 1 && at6.amount < 1 && at9.dizzy && at9.amount > 0, `full strength for 5 s, then fading (${at4.amount.toFixed(2)} at 4.5 s, ${at6.amount.toFixed(2)} at 6 s, ${at9.amount.toFixed(2)} at 9 s)`);
+    check(at9.wiggles === 0, `steering side to side while driving doesn't shake it off (${at9.wiggles} wiggles counted)`);
 
     // A knob: with the fall threshold past what a 6 m drop reaches, it's no longer a dizzy fall.
     await game('reset');

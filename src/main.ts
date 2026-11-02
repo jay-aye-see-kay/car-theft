@@ -601,6 +601,8 @@ async function main() {
   };
   /** Game time in fixed ticks (afterTick's clock). */
   let tickClock = 0;
+  /** ?debug lastImpact(): the hardest knock the driven car's had. */
+  let biggestImpact = 0;
 
   /**
    * One frame of game logic: input, physics steps for `frameDt` of game
@@ -629,12 +631,12 @@ async function main() {
     const jump = input.consume('jump');
 
     // Dizzy: wiggling the stick or mashing jump / handbrake shakes it off sooner.
-    dizzy.update(frameDt, input.moveX, input.moveY, jump ? 1 : 0);
+    dizzy.update(frameDt, input.moveX, input.moveY, jump ? 1 : 0, !!driving);
     const daze = dizzy.amount;
     // Mush: the controls lag and drift, more the dizzier you are.
     const ease = 1 - Math.exp(-frameDt * THREE.MathUtils.lerp(40, 2.5, daze * DIZZY.mush));
     const dizzyT = dizzy.time;
-    const drift = daze * DIZZY.mush * (Math.sin(dizzyT * 2.3) * 0.9 + Math.sin(dizzyT * 0.83) * 0.6);
+    const drift = daze * DIZZY.mush * dizzy.drift();
     const slow = 1 - DIZZY.slowdown * daze;
 
     // Camera-relative movement on foot: stick up walks away from the camera.
@@ -771,7 +773,10 @@ async function main() {
       }
       if (car === driving) {
         crash = car.impact;
-        if (CRASH_DIZZY.on && car.impact > CRASH_DIZZY.impact) dizzy.trigger(severity(car.impact, CRASH_DIZZY.impact), 'crash');
+        biggestImpact = Math.max(biggestImpact, car.impact);
+        if (CRASH_DIZZY.on && car.impact > CRASH_DIZZY.impact) {
+          dizzy.trigger(severity(car.impact, CRASH_DIZZY.impact, CRASH_DIZZY.fullImpact), 'crash', CRASH_DIZZY.minTime, CRASH_DIZZY.maxTime);
+        }
       }
       car.impact = 0;
     }
@@ -1193,6 +1198,18 @@ async function main() {
         const g = map.heightAt(x, z);
         car.place(new THREE.Vector3(x, (Number.isNaN(g) ? p.y : g) + 0.9, z), h);
         car.body.setLinvel({ x: Math.cos(h) * speed, y: 0, z: -Math.sin(h) * speed }, true);
+      },
+      /** Set car `index` moving at `speed` m/s the way it faces (to test a crash at a given speed). */
+      launchCar: (index: number, speed: number) => {
+        const car = cars[index].car;
+        const h = _euler.setFromQuaternion(car.object.quaternion, 'YXZ').y;
+        car.body.setLinvel({ x: Math.cos(h) * speed, y: 0, z: -Math.sin(h) * speed }, true);
+      },
+      /** The largest crash impact (m/s of sudden speed change) the driven car has had since the last call. */
+      lastImpact: () => {
+        const v = biggestImpact;
+        biggestImpact = 0;
+        return v;
       },
       step,
       /** Manual mode: draw a frame (for a screenshot); resolves once it's on screen. */

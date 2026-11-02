@@ -46,7 +46,8 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
     Copy gives them as JSON to paste into an issue and make the defaults. No query parameters for knobs.
   - `src/dizzy.ts` (`DIZZY`, `CRASH_DIZZY`): falls, car hits on foot and big crashes (driver) make you dizzy:
     slow, mushy, drifting controls, camera sway (`ChaseCamera.sway`), wobble, `src/stars.ts` overhead
-    (instanced, shared with pedestrians); wiggling shakes it off; immune for a bit after.
+    (instanced, shared with pedestrians). Full strength for `full` s, then fading; crashes scale 2–12 s
+    with the knock (~50 to ~180 km/h); on foot (not driving) wiggling shakes it off; immune for a bit after.
   - `src/peds.ts` (`PEDS`, `HITS`): pedestrians on the road graph's footpaths (`KERB_GAP` past the
     carriageway), seeded (`reset(seed)`), spawned out of view; no colliders: a car within reach launches
     them on a scripted arc (bounce, lie, get up, react: fist and "Oi!", chase, dust off). `src/peds-mesh.ts`
