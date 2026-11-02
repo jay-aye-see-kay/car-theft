@@ -1,7 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { GameAudio } from './audio.ts';
-import { ChaseCamera, DRIVING, FLYING, ON_FOOT } from './camera.ts';
+import { ChaseCamera, DRIVING, FLYING, ON_FOOT, fitFov } from './camera.ts';
 import { FLY_CODE, StickCode } from './cheats.ts';
 import { TERRAIN_ONLY_QUERY } from './city/building-chunk.ts';
 import { Bubbles } from './bubbles.ts';
@@ -118,7 +118,7 @@ async function main() {
   const sky = new THREE.Color(atmosphere.sky);
   scene.background = sky;
   scene.fog = new THREE.Fog(sky, atmosphere.fogNear, atmosphere.fogFar);
-  const camera = new THREE.PerspectiveCamera(62, app.clientWidth / app.clientHeight, 0.3, atmosphere.far);
+  const camera = new THREE.PerspectiveCamera(fitFov(app.clientWidth / app.clientHeight), app.clientWidth / app.clientHeight, 0.3, atmosphere.far);
   const skyDome = new Sky(sky, atmosphere.far * 0.9, atmosphere.zenith, sun.position);
   scene.add(skyDome.mesh);
 
@@ -485,6 +485,7 @@ async function main() {
     const h = app.clientHeight;
     if (!w || !h) return;
     camera.aspect = w / h;
+    camera.fov = fitFov(w / h);
     camera.updateProjectionMatrix();
     renderer.setSize(w, h, false);
   }).observe(app);

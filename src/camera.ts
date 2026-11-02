@@ -33,6 +33,26 @@ tune('camera-driving', 'Camera: driving', DRIVING, PROFILE_KNOBS);
 tune('camera-foot', 'Camera: on foot', ON_FOOT, PROFILE_KNOBS);
 tune('camera-flying', 'Camera: flying', FLYING, PROFILE_KNOBS);
 
+/**
+ * Field of view. A fixed vertical FOV makes the horizontal one grow with the
+ * screen's width: ~87° on a 16:10 laptop but ~105° on a phone in landscape
+ * (~2.2:1), which looks fish-eyed. So the horizontal FOV is capped at about
+ * what a 16:9 screen gets, and wider screens get a narrower vertical one.
+ */
+export const LENS = { fov: 62, maxWide: 94 };
+tune('camera-lens', 'Camera: lens', LENS, {
+  fov: { label: 'Field of view (vertical)', min: 30, max: 100, step: 1, unit: '°' },
+  maxWide: { label: 'Widest across', min: 50, max: 140, step: 1, unit: '°' },
+});
+
+/** Vertical FOV, degrees, for a screen of this width / height. */
+export function fitFov(aspect: number): number {
+  const half = THREE.MathUtils.degToRad(LENS.fov / 2);
+  const maxHalf = THREE.MathUtils.degToRad(LENS.maxWide / 2);
+  const capped = Math.atan(Math.tan(maxHalf) / aspect);
+  return THREE.MathUtils.radToDeg(2 * Math.min(half, capped));
+}
+
 const _fwd = new THREE.Vector3();
 const _desired = new THREE.Vector3();
 const _look = new THREE.Vector3();
@@ -46,7 +66,6 @@ export class ChaseCamera {
   private yawAngle: number | null = null;
   private readonly smoothedPos = new THREE.Vector3();
   private readonly smoothedLook = new THREE.Vector3();
-  private readonly baseFov: number;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly world: RAPIER.World;
   private shakeAmount = 0;
@@ -58,7 +77,6 @@ export class ChaseCamera {
   constructor(camera: THREE.PerspectiveCamera, world: RAPIER.World) {
     this.camera = camera;
     this.world = world;
-    this.baseFov = camera.fov;
   }
 
   /** Direction the camera faces, as atan2(z, x). Used for camera-relative walking. */
@@ -130,7 +148,9 @@ export class ChaseCamera {
       this.shakeAmount *= Math.exp(-dt * 9);
     }
 
-    const fov = this.baseFov + Math.min(s * 0.3, 14);
+    // Widen with speed, in proportion, so a narrowed (landscape phone) lens widens no more across.
+    const base = fitFov(this.camera.aspect);
+    const fov = base * (1 + Math.min(s * 0.3, 14) / 62);
     if (Math.abs(fov - this.camera.fov) > 0.05) {
       this.camera.fov += (fov - this.camera.fov) * (1 - Math.exp(-dt * 3));
       this.camera.updateProjectionMatrix();
