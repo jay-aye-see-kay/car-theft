@@ -12,6 +12,9 @@ export default {
     check(s.water === 0 && sea.ground < -4 && sea.top < 0, `harbour water at sea level (${s.water} m) over the harbour floor (${sea.ground.toFixed(1)} m)`);
     const deck = await game('probe', 20.3, -250.3);
     check(deck.ground > 2 && deck.ground < 4.5, `Queens Wharf deck at ${deck.ground.toFixed(1)} m`);
+    // A marina pontoon is a deck of its own (tools/citygen/piers.ts), just above the water.
+    const pontoon = await game('probe', -601.8, -149.9);
+    check(pontoon.top > 0.4 && pontoon.top < 0.7, `Viaduct marina pontoon deck ${pontoon.top?.toFixed(2)} m above the water`);
 
     const dryLand = async (pos) => {
       const p = await game('probe', pos[0], pos[2]);

@@ -28,7 +28,7 @@ import { prepareGround } from './prepare.ts';
 import { CBD_BBOX, ORIGIN } from './project.ts';
 import { Overrides } from './overrides.ts';
 import { loadWikidata } from './wikidata.ts';
-import { layPiers } from './piers.ts';
+import { buildDecks, hideDeckCells, layPiers } from './piers.ts';
 import { buildBarriers } from './barriers.ts';
 import { emitTrees, findTrees, treeTris } from './trees.ts';
 import { placeFurniture } from './furniture.ts';
@@ -47,7 +47,7 @@ for (const w of stale) console.warn(`overrides/${AREA}.json: ${w}`);
 console.log(`Overrides: ${overrides.size} entries, ${stale.length} stale`);
 // Piers the LiDAR sees through go back into the DEM before anything samples it.
 const piers = layPiers(data.osm, data.dem, overrides);
-console.log(`Piers: ${piers.piers} decks laid over the water (${piers.pixels} DEM pixels)`);
+console.log(`Piers: ${piers.piers} decks laid over the water (${piers.pixels} DEM pixels), ${piers.decks.length} narrow ones built from their outlines`);
 const grid = chunkGrid(CBD_BBOX);
 console.log(`Grid ${grid.nx}x${grid.nz} chunks of ${CHUNK_SIZE} m from x0=${grid.x0} z0=${grid.z0}`);
 
@@ -86,8 +86,17 @@ const walls = buildSeawalls(data.dem, grid, terrainSampler, (x, z) => {
   let mb = blds.chunks.get(`${i},${j}`);
   if (!mb) blds.chunks.set(`${i},${j}`, (mb = new MeshBuilder()));
   return mb;
-});
+}, piers.decked);
 console.log(`Sea walls: ${walls.km.toFixed(1)} km along ${walls.lines} coastlines`);
+// A deck reaching over the grid's edge goes in the nearest chunk (its burnt ground inside the grid needs covering).
+const decks = buildDecks(piers.decks, (x, z) => {
+  const i = Math.min(grid.nx - 1, Math.max(0, Math.floor((x - grid.x0) / CHUNK_SIZE)));
+  const j = Math.min(grid.nz - 1, Math.max(0, Math.floor((z - grid.z0) / CHUNK_SIZE)));
+  let mb = blds.chunks.get(`${i},${j}`);
+  if (!mb) blds.chunks.set(`${i},${j}`, (mb = new MeshBuilder()));
+  return mb;
+});
+console.log(`Pier decks: ${decks} built, ${hideDeckCells(data.dem, piers.decked, terrainSampler, ground)} terrain cells under them left undrawn`);
 // The ground under buildings is never seen: the game leaves it out of the terrain mesh.
 const families = new Map<string, number>();
 for (const f of blds.footprints) {

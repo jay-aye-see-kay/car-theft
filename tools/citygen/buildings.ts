@@ -87,7 +87,7 @@ const BASE_BAND = 4;
 export type HeightSource = 'height' | 'levels' | 'dsm' | 'default';
 
 type Ring = Local[];
-type Polygon = { outer: Ring; holes: Ring[] };
+export type Polygon = { outer: Ring; holes: Ring[] };
 
 /** A building outline or part, ready to extrude. */
 export type Solid = {
@@ -202,7 +202,7 @@ class Footprints<T = Solid> {
  * wound so its signed area has the requested sign (outer > 0, holes < 0):
  * with that convention (dz, -dx) points away from the solid for every edge.
  */
-function cleanRing(points: Ring, positive: boolean): Ring | null {
+export function cleanRing(points: Ring, positive: boolean): Ring | null {
   let r = points.slice();
   if (r.length > 1 && r[0].x === r[r.length - 1].x && r[0].z === r[r.length - 1].z) r.pop();
   for (let changed = true; changed && r.length >= 3; ) {

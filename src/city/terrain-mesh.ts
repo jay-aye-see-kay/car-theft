@@ -16,6 +16,10 @@ import { GROUND_APRON, PAVED_SINK, SURFACE_ID, underPaving, type GroundSamples, 
 // full 2 m heightfield, so near the player what you see is what you drive on,
 // except under road strips, which cover it: there the ground is drawn a few
 // cm lower (PAVED_SINK) so the strips can be simplified.
+//
+// Where the coarse grid meets the sea, its underwater vertices are set so
+// its waterline falls where the 2 m ground's does (shoreline), rather than
+// a 10 m saw-tooth of the grid's own.
 
 export interface TerrainLayout {
   /** Metres between samples. */
@@ -26,6 +30,8 @@ export interface TerrainLayout {
   apron: number;
   /** Height of the flattened harbour floor. */
   seaShelf: number;
+  /** The sea's surface, if there is one (see shoreline). */
+  water?: number;
 }
 
 const SKIRT_DEPTH = 4;
@@ -226,9 +232,14 @@ export function buildTerrainParts(
 
   // Coarse grid, sunk under the drawn ground.
   const sideC = cells / step + 1;
-  const sink = coarseSink(hd, cells, step);
+  // Under the water nothing is seen, so the coarse grid needn't clear the harbour floor, only the water over it.
+  const water = layout.water;
+  const sink = coarseSink(water === undefined ? hd : (r, c) => Math.max(hd(r, c), water), cells, step);
+  const coarseY = new Float32Array(sideC * sideC);
+  for (let gz = 0; gz < sideC; gz++) for (let gx = 0; gx < sideC; gx++) coarseY[gz * sideC + gx] = hd(gz * step, gx * step) - sink[gz * sideC + gx];
+  const shore = water === undefined ? null : shoreline(coarseY, h, cells, step, water);
   const coarse = new Int32Array(sideC * sideC);
-  for (let gz = 0; gz < sideC; gz++) for (let gx = 0; gx < sideC; gx++) coarse[gz * sideC + gx] = lattice(gz * step, gx * step, hd(gz * step, gx * step) - sink[gz * sideC + gx], step);
+  for (let gz = 0; gz < sideC; gz++) for (let gx = 0; gx < sideC; gx++) coarse[gz * sideC + gx] = lattice(gz * step, gx * step, coarseY[gz * sideC + gx], step);
   const at = (grid: Int32Array, w: number, gx: number, gz: number) => grid[gz * w + gx];
   /** Quads of a grid (side w, spacing `per` cells) over cells [r0, r1) x [c0, c1). */
   /** Whether the cell of side `per` samples with its north-west corner at sample (r, c) is a cavity's opening. */
@@ -313,8 +324,10 @@ export function buildTerrainParts(
         const ground = lods.map(([g, w, per]) => Uint32Array.from([...quads(g, w, per, r0, r1, c0, c1), ...openings(per, r0, r1, c0, c1)])) as [Uint32Array, Uint32Array];
         const skirts = lods.map(([g, w, per]) => OUT.map((o, e) => skirt(v, edge(g, w, per, e, r0, r1, c0, c1), o, keep))) as [Uint32Array[], Uint32Array[]];
         // The coarse grid's height anywhere in the tile is linear over each
-        // coarse triangle; compare it with every 2 m sample.
+        // coarse triangle; compare it with every 2 m sample. A tile on the
+        // shore never is (its underwater vertices aren't sunk under the ground).
         let flat = true;
+        if (shore) for (let gz = r0 / step; gz <= r1 / step && flat; gz++) for (let gx = c0 / step; gx <= c1 / step && flat; gx++) flat = !shore[gz * sideC + gx];
         for (let r = r0; r <= r1 && flat; r++) {
           for (let c = c0; c <= c1 && flat; c++) {
             const gz = Math.min(Math.floor(r / step), sideC - 2);
@@ -351,7 +364,9 @@ export function buildTerrainParts(
  * the real ground. Interior vertices drop by the worst overshoot in their
  * cells, which puts every sample in an all-interior cell back at or below
  * the ground. Edge vertices only look along their edge (data both chunks
- * share, so seams still match); corners stay put.
+ * share, so seams still match); corners stay put. Given the ground with the
+ * sea filled in to its surface (the water's opaque), a vertex on the shore
+ * isn't dragged under the water by the harbour floor next to it.
  */
 function coarseSink(h: (r: number, c: number) => number, cells: number, step: number): Float32Array {
   const side = cells / step + 1;
@@ -401,6 +416,62 @@ function coarseSink(h: (r: number, c: number) => number, cells: number, step: nu
     }
   }
   return sink;
+}
+
+/** Coarse grid steps along a triangle edge (dgx, dgz): the grid's lines and the diagonal its quads are split along. */
+const EDGES = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]] as const;
+/** Deepest an underwater coarse vertex goes to pull the waterline in to the shore, m below the surface. */
+const SHORE_DEEP = 200;
+
+/**
+ * Sets each underwater coarse vertex beside dry land (in `y`, in place) so
+ * that, along every triangle edge to a dry vertex, the coarse surface meets
+ * the water no further out than the 2 m ground does along that line. With
+ * the harbour floor flat, the 10 m grid would otherwise cross the water a
+ * fixed fraction of the way along each edge: a saw-tooth coast that pokes
+ * out past the sea walls and bites in behind them. The water is opaque, so
+ * how deep the vertex goes is never seen. Vertices on the chunk's edge only
+ * look along it (data both chunks share, so seams still match); corners
+ * stay put. Returns which vertices were moved.
+ */
+function shoreline(y: Float32Array, h: (r: number, c: number) => number, cells: number, step: number, water: number): Uint8Array {
+  const side = cells / step + 1;
+  const last = side - 1;
+  const moved = new Uint8Array(side * side);
+  for (let gz = 0; gz < side; gz++) {
+    for (let gx = 0; gx < side; gx++) {
+      if (!(h(gz * step, gx * step) < water)) continue;
+      const onX = gx === 0 || gx === last;
+      const onZ = gz === 0 || gz === last;
+      if (onX && onZ) continue;
+      let best = Infinity;
+      for (const [dx, dz] of EDGES) {
+        if ((onX && dx) || (onZ && dz)) continue;
+        const lx = gx + dx;
+        const lz = gz + dz;
+        if (lx < 0 || lz < 0 || lx > last || lz > last) continue;
+        const yl = y[lz * side + lx];
+        if (!(yl > water)) continue;
+        // Walk the 2 m samples from the dry vertex back towards this one to where the ground meets the water.
+        let f = 1;
+        let prev = h(lz * step, lx * step);
+        for (let k = 1; k <= step; k++) {
+          const cur = h(lz * step - k * dz, lx * step - k * dx);
+          if (cur < water) {
+            f = (k - 1 + (prev > water ? (prev - water) / (prev - cur) : 0)) / step;
+            break;
+          }
+          prev = cur;
+        }
+        // The line from the dry vertex through the water at f.
+        best = Math.min(best, f > 0 ? yl - (yl - water) / f : -Infinity);
+      }
+      if (best === Infinity) continue;
+      y[gz * side + gx] = Math.min(water - 0.05, Math.max(water - SHORE_DEEP, best));
+      moved[gz * side + gx] = 1;
+    }
+  }
+  return moved;
 }
 
 const _earth = new THREE.Color();

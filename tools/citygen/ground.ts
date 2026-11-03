@@ -54,6 +54,8 @@ export class GroundRaster {
   readonly canopy: Uint8Array;
   /** Points on a 1 m lattice (twice the class lattice's) inside a building: which one (see coverBuilding), 0 for none. */
   private readonly under: Uint32Array;
+  /** Cells (by north-west lattice point) the game shouldn't draw, besides those under buildings (see hideCell). */
+  private readonly hidden: Uint8Array;
 
   constructor(grid: Grid) {
     this.c0 = grid.x0 / CELL_SIZE - GROUND_APRON;
@@ -63,6 +65,14 @@ export class GroundRaster {
     this.classes = new Uint8Array(this.cols * this.rows); // 0 = urban
     this.canopy = new Uint8Array(this.cols * this.rows);
     this.under = new Uint32Array((2 * this.cols - 1) * (2 * this.rows - 1));
+    this.hidden = new Uint8Array(this.cols * this.rows);
+  }
+
+  /** Leaves the terrain cell with its north-west corner at lattice point (c, r) undrawn: something else covers it. */
+  hideCell(c: number, r: number) {
+    const cc = c - this.c0;
+    const rr = r - this.r0;
+    if (cc >= 0 && rr >= 0 && cc < this.cols && rr < this.rows) this.hidden[rr * this.cols + cc] = 1;
   }
 
   /**
@@ -199,6 +209,10 @@ export class GroundRaster {
       for (let c = 0; c < n; c++) {
         const cc = i * CELLS + c;
         if (rr + 1 >= this.rows || cc + 1 >= this.cols) continue;
+        if (this.hidden[rr * this.cols + cc]) {
+          covered[r * n + c] = 1;
+          continue;
+        }
         const id = this.under[2 * rr * w + 2 * cc];
         let all = id > 0;
         for (let dj = 0; dj <= 2 && all; dj++) for (let di = 0; di <= 2 && all; di++) all = this.under[(2 * rr + dj) * w + 2 * cc + di] === id;

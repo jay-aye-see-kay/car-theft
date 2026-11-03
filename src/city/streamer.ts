@@ -102,7 +102,7 @@ export class ChunkStreamer {
     this.world = world;
     this.body = body;
     const t = manifest.terrain;
-    this.layout = { cell: t.cellSize, cells: manifest.chunkSize / t.cellSize, apron: t.apron, seaShelf: t.seaShelf };
+    this.layout = { cell: t.cellSize, cells: manifest.chunkSize / t.cellSize, apron: t.apron, seaShelf: t.seaShelf, water: manifest.water?.level };
     for (const info of manifest.chunks) this.slots.set(`${info.i},${info.j}`, { info, waiters: [], pinnedUntil: 0 });
   }
 

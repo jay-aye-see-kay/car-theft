@@ -160,6 +160,9 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   rooftop plant), `eras.ts` (facade family, colours and cornices per architectural era).
   Road graph: `roadgraph.ts` (junction-to-junction edges with lanes each way, heights from the
   smoothed ground or the deck → `roadgraph.json`; `prepare.ts` is the ground smoothing it shares with `build.ts`).
+  Coast: `piers.ts` (pier decks burnt into the DEM; narrow piers and pontoons also built as decks from their OSM
+  outlines, left out of the coastline, the terrain cells under them undrawn), `seawalls.ts` (walls and caps along the
+  traced coastline). In the game the 10 m grid's waterline follows the 2 m ground's (`shoreline` in `terrain-mesh.ts`).
   Map: `map.ts` (map.png, `MAP_PX` 1.5 m per pixel to keep it ~6.5 MP for phones: ground classes, water, roofs, from the chunk files, no OSM needed).
   Places: `places.ts` (OSM POIs → `places.json`, marker on the kerb outside), `names.ts` (parody
   names: brand table, hand-written lists per kind, templates; no real business name may leak).

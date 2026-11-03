@@ -9,12 +9,23 @@
 // them in the DEM (where they join the land), else PIER_DECK; floating
 // pontoons sit just above the water. An override `deck` sets the height,
 // or `false` leaves the pier out.
-import { assembleRings, inRing, nodesLocal } from './buildings.ts';
+//
+// Narrow piers and pontoons (a marina's fingers, a metre or three across)
+// are too fine for the 2 m terrain lattice and the traced coastline, which
+// turn them into notched, jagged strips. Those are also built as decks of
+// their own, straight from the OSM outline (buildDecks): a flat top at deck
+// height and sides down into the water. Their DEM pixels are burnt as any
+// pier's (so the game's ground still knows they're there), but left out of
+// the coastline (`decked`), and the terrain cells that are only their
+// burnt lattice aren't drawn (hideDeckCells), or they'd poke out past the
+// sides.
+import { assembleRings, cleanRing, inRing, MeshBuilder, nodesLocal, rgb, type Polygon } from './buildings.ts';
+import type { GroundRaster } from './ground.ts';
 import type { OsmData, OsmWay, Tags } from './osm.ts';
 import type { Overrides } from './overrides.ts';
 import { localToNztm, nztmToLocal, type Local } from './project.ts';
 import type { Raster } from './raster.ts';
-import { SEA_CUTOFF, WATER_LEVEL } from './terrain.ts';
+import { CELL_SIZE, SEA_CUTOFF, SEA_SHELF, WATER_LEVEL, type TerrainSampler } from './terrain.ts';
 
 /** Deck of a fixed pier with no dry part to copy, m above sea level (the wharves are ~3 m). */
 const PIER_DECK = 2.8;
@@ -22,12 +33,34 @@ const PIER_DECK = 2.8;
 const PONTOON = 0.5;
 /** Burn the deck this far past the mapped edge, so the 2 m terrain lattice catches narrow piers. */
 const GROW = 0.75;
+/** Piers narrower than this on average (m: twice the area over the perimeter) get a deck of their own. */
+const NARROW = 6;
+/** A deck's top sits this far over the burnt ground under it, as the sea walls' caps do. */
+const DECK_LIFT = 0.05;
+/** Its sides reach this far under the water. */
+const DECK_BOTTOM = WATER_LEVEL - 2;
+const DECK_SIDE = rgb(0x57544e);
+const DECK_TOP = rgb(0x9b978d);
+
+/** A narrow pier or pontoon to build as its own deck: its outline and deck height. */
+export type Deck = { key: string; polygon: Polygon; deck: number };
+
+export type PierResult = {
+  piers: number;
+  pixels: number;
+  decks: Deck[];
+  /** DEM pixels raised under decks, 1 each: not coastline (seawalls.ts treats them as water). */
+  decked: Uint8Array;
+};
 
 const isPier = (t: Tags) => t.man_made === 'pier' && t.area !== 'no';
 
-/** Raises the DEM under pier areas in place. Returns how many piers were laid and DEM pixels raised. */
-export function layPiers(osm: OsmData, dem: Raster, overrides?: Overrides): { piers: number; pixels: number } {
-  const jobs: { key: string; tags: Tags; rings: Local[][] }[] = [];
+/**
+ * Raises the DEM under pier areas in place. Returns how many piers were
+ * laid and DEM pixels raised, and the narrow ones to build as decks.
+ */
+export function layPiers(osm: OsmData, dem: Raster, overrides?: Overrides): PierResult {
+  const jobs: { key: string; tags: Tags; rings: Local[][]; outline?: Polygon }[] = [];
   const viaRelation = new Set<number>();
   for (const rel of osm.relations.values()) {
     if (!isPier(rel.tags) || rel.tags.type !== 'multipolygon') continue;
@@ -45,11 +78,16 @@ export function layPiers(osm: OsmData, dem: Raster, overrides?: Overrides): { pi
     if (!isPier(way.tags) || viaRelation.has(way.id)) continue;
     if (way.nodes.length < 4 || way.nodes[0] !== way.nodes[way.nodes.length - 1]) continue;
     const ring = nodesLocal(osm, way.nodes);
-    if (ring) jobs.push({ key: `w${way.id}`, tags: way.tags, rings: [ring] });
+    if (!ring) continue;
+    // Only plain closed ways can be decks: multipolygons here are the big wharves.
+    const outer = cleanRing(ring, true);
+    jobs.push({ key: `w${way.id}`, tags: way.tags, rings: [ring], outline: outer && narrow(outer) ? { outer, holes: [] } : undefined });
   }
 
   let piers = 0;
   let pixels = 0;
+  const decks: Deck[] = [];
+  const decked = new Uint8Array(dem.width * dem.height);
   for (const job of jobs) {
     const o = overrides?.get(job.key)?.deck;
     if (o === false) continue;
@@ -68,6 +106,7 @@ export function layPiers(osm: OsmData, dem: Raster, overrides?: Overrides): { pi
       // Only fill the sea (and low spots on the deck): never cut into land.
       if (Number.isNaN(v) || v < SEA_CUTOFF || v < deck - 0.5) {
         dem.data[k] = deck;
+        if (job.outline) decked[k] = 1;
         raised++;
       }
     }
@@ -75,8 +114,89 @@ export function layPiers(osm: OsmData, dem: Raster, overrides?: Overrides): { pi
       piers++;
       pixels += raised;
     }
+    if (job.outline) decks.push({ key: job.key, polygon: job.outline, deck });
   }
-  return { piers, pixels };
+  return { piers, pixels, decks, decked };
+}
+
+/** Whether a ring (wound positive) is narrow enough to be a deck of its own. */
+function narrow(ring: Local[]): boolean {
+  let area = 0;
+  let perimeter = 0;
+  for (let k = 0; k < ring.length; k++) {
+    const a = ring[k];
+    const b = ring[(k + 1) % ring.length];
+    area += a.x * b.z - b.x * a.z;
+    perimeter += Math.hypot(b.x - a.x, b.z - a.z);
+  }
+  return Math.abs(area) / perimeter < NARROW;
+}
+
+/**
+ * Each deck as a flat top at its height and sides from under the water,
+ * solid, in the buildings layer of the chunk its middle is in. Sides that
+ * end up inside the ground (where a pier meets the land) are never seen.
+ */
+export function buildDecks(decks: Deck[], chunkAt: (x: number, z: number) => MeshBuilder | null): number {
+  let built = 0;
+  for (const d of decks) {
+    const r = d.polygon.outer;
+    const mb = chunkAt(r.reduce((s, p) => s + p.x, 0) / r.length, r.reduce((s, p) => s + p.z, 0) / r.length);
+    if (!mb) continue;
+    mb.prism({ polygons: [d.polygon] }, DECK_BOTTOM, d.deck + DECK_LIFT, DECK_SIDE, DECK_TOP, true);
+    built++;
+  }
+  return built;
+}
+
+/**
+ * Hides the terrain cells that are nothing but a deck's burnt ground: every
+ * corner either the harbour floor or a lattice point raised under a deck
+ * (one whose box filter reads a `decked` pixel). Their ground would show as
+ * lumps past the deck's sides; with them gone it's the deck over the water.
+ * Cells with a corner on land (where a pier meets the shore) are kept.
+ */
+export function hideDeckCells(dem: Raster, decked: Uint8Array, terrain: TerrainSampler, ground: GroundRaster): number {
+  const deckPixel = (x: number, z: number) => {
+    const p = localToNztm(x, z);
+    const c = Math.floor((p.e - dem.west) / dem.res);
+    const r = Math.floor((dem.north - p.n) / dem.res);
+    return c >= 0 && r >= 0 && c < dem.width && r < dem.height && decked[r * dem.width + c] === 1;
+  };
+  /** 0 harbour floor, 1 under a deck, 2 land. Memoised by lattice point. */
+  const kinds = new Map<number, number>();
+  const kind = (c: number, r: number) => {
+    const key = (c + 0x8000) * 0x10000 + (r + 0x8000);
+    let k = kinds.get(key);
+    if (k === undefined) {
+      const x = c * CELL_SIZE;
+      const z = r * CELL_SIZE;
+      if (terrain.lattice(c, r) <= SEA_SHELF + 0.01) k = 0;
+      else k = [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].some(([dx, dz]) => deckPixel(x + dx, z + dz)) ? 1 : 2;
+      kinds.set(key, k);
+    }
+    return k;
+  };
+  // Candidate cells: those round every decked pixel.
+  const cells = new Set<number>();
+  for (let k = 0; k < decked.length; k++) {
+    if (!decked[k]) continue;
+    const r = Math.floor(k / dem.width);
+    const p = nztmToLocal(dem.west + (k - r * dem.width + 0.5) * dem.res, dem.north - (r + 0.5) * dem.res);
+    const c0 = Math.floor(p.x / CELL_SIZE);
+    const r0 = Math.floor(p.z / CELL_SIZE);
+    for (let dr = -1; dr <= 0; dr++) for (let dc = -1; dc <= 0; dc++) cells.add((c0 + dc + 0x8000) * 0x10000 + (r0 + dr + 0x8000));
+  }
+  let hidden = 0;
+  for (const key of [...cells].sort((a, b) => a - b)) {
+    const c = Math.floor(key / 0x10000) - 0x8000;
+    const r = (key % 0x10000) - 0x8000;
+    const corners = [kind(c, r), kind(c + 1, r), kind(c, r + 1), kind(c + 1, r + 1)];
+    if (corners.includes(2) || !corners.includes(1)) continue;
+    ground.hideCell(c, r);
+    hidden++;
+  }
+  return hidden;
 }
 
 /** Indices of DEM pixels whose centres are inside the rings or within GROW of their edges. */

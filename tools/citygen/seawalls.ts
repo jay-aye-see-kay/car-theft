@@ -8,10 +8,11 @@
 // to the deck, plus a cap strip running a few metres inland at deck height
 // that covers the lattice's ragged edge. Both go into the buildings layer
 // (always drawn) and its collider, so a car drives on the cap and drops
-// off a clean edge.
+// off a clean edge. Narrow piers and pontoons are decks of their own
+// (piers.ts), so their pixels count as water here.
 import { MeshBuilder, rgb } from './buildings.ts';
 import { localToNztm, nztmToLocal, type Local } from './project.ts';
-import { pixelLocal, type Raster } from './raster.ts';
+import type { Raster } from './raster.ts';
 import { CHUNK_SIZE, isWet, WATER_LEVEL, type Grid, type TerrainSampler } from './terrain.ts';
 
 /** How far the straightened coastline may stray from the pixel staircase, m. */
@@ -31,12 +32,30 @@ const UP = [0, 1, 0] as const;
 
 type Pt = { x: number; z: number };
 
-export function buildSeawalls(dem: Raster, grid: Grid, terrain: TerrainSampler, chunkAt: (x: number, z: number) => MeshBuilder | null) {
-  const lines = traceCoast(dem, grid);
+/** Whether the DEM pixel `k` is water for the coastline: open water, or under a deck (piers.ts). */
+type Wet = (k: number) => boolean;
+
+/** @param decked DEM pixels under decks, 1 each (see layPiers) */
+export function buildSeawalls(dem: Raster, grid: Grid, terrain: TerrainSampler, chunkAt: (x: number, z: number) => MeshBuilder | null, decked?: Uint8Array) {
+  const wetPixel: Wet = (k) => isWet(dem.data[k]) || (!!decked && decked[k] === 1);
+  const lines = traceCoast(dem, grid, wetPixel);
   let metres = 0;
-  for (const line of lines) metres += emitWall(line, dem, terrain, chunkAt);
+  for (const line of lines) metres += emitWall(line, dem, terrain, chunkAt, wetPixel);
   return { lines: lines.length, km: metres / 1000 };
 }
+
+/** The pixel index of a local point, or -1 outside the raster. */
+function pixelIndex(dem: Raster, x: number, z: number): number {
+  const p = localToNztm(x, z);
+  const c = Math.floor((p.e - dem.west) / dem.res);
+  const r = Math.floor((dem.north - p.n) / dem.res);
+  return c < 0 || r < 0 || c >= dem.width || r >= dem.height ? -1 : r * dem.width + c;
+}
+
+const wetAt = (dem: Raster, wet: Wet, x: number, z: number) => {
+  const k = pixelIndex(dem, x, z);
+  return k < 0 || wet(k);
+};
 
 // ---------------------------------------------------------------- tracing
 
@@ -45,14 +64,14 @@ export function buildSeawalls(dem: Raster, grid: Grid, terrain: TerrainSampler, 
  * pixels inside the grid, each kept with the dry side on its left in pixel
  * space, joined end to end and simplified.
  */
-function traceCoast(dem: Raster, grid: Grid): Pt[][] {
+function traceCoast(dem: Raster, grid: Grid, wetPixel: Wet): Pt[][] {
   const nw = localToNztm(grid.x0 - 4, grid.z0 - 4);
   const se = localToNztm(grid.x0 + grid.nx * CHUNK_SIZE + 4, grid.z0 + grid.nz * CHUNK_SIZE + 4);
   const c0 = Math.max(0, Math.floor((nw.e - dem.west) / dem.res));
   const c1 = Math.min(dem.width - 1, Math.ceil((se.e - dem.west) / dem.res));
   const r0 = Math.max(0, Math.floor((dem.north - nw.n) / dem.res));
   const r1 = Math.min(dem.height - 1, Math.ceil((dem.north - se.n) / dem.res));
-  const wet = (r: number, c: number) => isWet(dem.data[r * dem.width + c]);
+  const wet = (r: number, c: number) => wetPixel(r * dem.width + c);
   // Directed edges between pixel corners (corner id = r * W + c), dry on the left.
   const W = dem.width + 1;
   const next = new Map<number, number[]>();
@@ -146,7 +165,7 @@ function simplifyLoop(pts: Pt[]): Pt[] {
 // ---------------------------------------------------------------- meshing
 
 /** Wall and cap along one coastline. Returns its length in metres. */
-function emitWall(line: Pt[], dem: Raster, terrain: TerrainSampler, chunkAt: (x: number, z: number) => MeshBuilder | null): number {
+function emitWall(line: Pt[], dem: Raster, terrain: TerrainSampler, chunkAt: (x: number, z: number) => MeshBuilder | null, wet: Wet): number {
   const closed = line.length > 2 && line[0].x === line[line.length - 1].x && line[0].z === line[line.length - 1].z;
   const pts = closed ? line.slice(0, -1) : line;
   const n = pts.length;
@@ -163,7 +182,7 @@ function emitWall(line: Pt[], dem: Raster, terrain: TerrainSampler, chunkAt: (x:
     const mx = (a.x + b.x) / 2;
     const mz = (a.z + b.z) / 2;
     let score = 0;
-    for (const t of [0.7, 1.5]) score += (isWet(pixelLocal(dem, mx + nx * t, mz + nz * t)) ? 1 : 0) - (isWet(pixelLocal(dem, mx - nx * t, mz - nz * t)) ? 1 : 0);
+    for (const t of [0.7, 1.5]) score += (wetAt(dem, wet, mx + nx * t, mz + nz * t) ? 1 : 0) - (wetAt(dem, wet, mx - nx * t, mz - nz * t) ? 1 : 0);
     out.push(score >= 0 ? { x: nx, z: nz } : { x: -nx, z: -nz });
   }
   // Per-vertex mitred normals.
@@ -188,7 +207,7 @@ function emitWall(line: Pt[], dem: Raster, terrain: TerrainSampler, chunkAt: (x:
   // The cap stops short of the water on the far side of a narrow pier or pontoon.
   const reach = pts.map((p, k) => {
     for (let t = 0.5; t <= CAP; t += 0.25) {
-      if (isWet(pixelLocal(dem, p.x - vn[k].x * t * vm[k], p.z - vn[k].z * t * vm[k]))) return Math.max(0.3, t - 0.5);
+      if (wetAt(dem, wet, p.x - vn[k].x * t * vm[k], p.z - vn[k].z * t * vm[k])) return Math.max(0.3, t - 0.5);
     }
     return CAP;
   });
