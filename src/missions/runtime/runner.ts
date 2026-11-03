@@ -280,6 +280,22 @@ export class MissionRunner {
     }
   }
 
+  /** Whether there's a mission of ours to call off (a guest can't call off the host's shared one). */
+  get canCancel(): boolean {
+    return !!this.run && !this.following();
+  }
+
+  /**
+   * The player calls their mission off: it fails, for everyone if it's shared
+   * (we're its host). Its marker waits until they've stepped out of it, as
+   * after any ending, so it doesn't start again where they stand.
+   */
+  cancel(): boolean {
+    if (!this.canCancel) return false;
+    this.end(this.run!, 'failed', 'Called it off. Fair enough.');
+    return true;
+  }
+
   /** Abandon any mission and forget results (?debug reset). */
   reset(): void {
     if (this.run) this.end(this.run, 'failed', '');

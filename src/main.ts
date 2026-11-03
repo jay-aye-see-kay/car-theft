@@ -32,6 +32,7 @@ import { loadMap } from './maps/index.ts';
 import { MISSIONS } from './missions/index.ts';
 import { MissionHud } from './missions/runtime/hud.ts';
 import { MissionMarkers } from './missions/runtime/markers.ts';
+import { QuitMission } from './missions/runtime/quit.ts';
 import { MissionRunner } from './missions/runtime/runner.ts';
 import { RoomPanel } from './net/panel.ts';
 import { roundQuat, roundVec, round2, type Pose } from './net/protocol.ts';
@@ -294,6 +295,8 @@ async function main() {
   const markers = new MissionMarkers();
   scene.add(markers.group);
   const missionHud = new MissionHud(hud);
+  const quitMission = new QuitMission(hud);
+  quitMission.onQuit = () => missions?.cancel();
   // The map (#14): the minimap, the full-screen map, your waypoint and the route
   // there. Only where there's a picture of the map (Auckland: tools/citygen/map.ts).
   const nav = new Navigator(map.roads ?? null);
@@ -345,7 +348,7 @@ async function main() {
   });
   const fullMap = chart ? new FullMap(hud, chart, nav, () => mapScene()) : null;
   const pause = () => {
-    paused = tweaksPanel.isOpen || !!fullMap?.open;
+    paused = tweaksPanel.isOpen || !!fullMap?.open || quitMission.isOpen;
     audio.setPaused(paused);
     input.clearPresses();
     // Paused, the cursor's back for clicking; closing hands the mouse straight back.
@@ -353,6 +356,7 @@ async function main() {
     if (started && !paused) input.lock();
   };
   tweaksPanel.onToggle = pause;
+  quitMission.onToggle = pause;
   if (fullMap) fullMap.onToggle = pause;
   if (minimap) minimap.onOpen = () => fullMap?.toggle(true);
   const roomNote = document.createElement('p');
@@ -1360,6 +1364,7 @@ async function main() {
       const view = missions.view();
       markers.update(view, map.heightAt, camera.position, clock);
       missionHud.update(view);
+      quitMission.update(missions.canCancel);
     }
     // Stepped tests (manual) keep the route up to date but only draw the minimap when they draw a frame.
     if (minimap && !manual) {
@@ -1964,6 +1969,7 @@ async function main() {
         upsideDownTime = 0;
         skids.clear();
         missions?.reset();
+        quitMission.ask(false);
         tweaksPanel.toggle(false);
         fullMap?.toggle(false);
         nav.reset();

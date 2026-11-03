@@ -110,6 +110,24 @@ export default {
     check(m.last?.result === 'failed' && /ferry left/.test(m.last.message), `the ferry leaves after 90 s (${m.last?.message})`);
     await shot('25-mission-failed');
 
+    // Quitting: the pill (or Q) asks first and pauses; "Keep going" carries on, Quit fails it.
+    await game('startMission', 'milk-run');
+    await step(5);
+    const pill = page.locator('#quit-mission');
+    const dialog = page.locator('#quit-confirm');
+    check(await pill.isVisible(), 'a Quit mission button while one is running');
+    await pill.click();
+    check((await dialog.isVisible()) && (await state()).paused, 'it asks "are you sure?" and pauses the game');
+    await dialog.locator('[data-no]').click();
+    check(!(await dialog.isVisible()) && !(await state()).paused && (await missions()).active === 'milk-run', 'Keep going carries on with the mission');
+    await page.keyboard.press('KeyQ');
+    check(await dialog.isVisible(), 'Q asks too');
+    await page.keyboard.press('KeyY');
+    await step(2);
+    m = await missions();
+    check(!m.active && m.last?.result === 'failed' && /called it off/i.test(m.last.message) && !(await dialog.isVisible()) && !(await pill.isVisible()),
+      `Y quits it: ${m.last?.result} ("${m.last?.message}"), the button gone`);
+
     // High Tower Sprint: needs a car; checkpoints in order, then a best time.
     await game('reset');
     await game('placePlayer', tower.x, tower.z, 0);

@@ -358,6 +358,85 @@ body {
   font-weight: 700;
 }
 
+/* Quit mission (src/missions/runtime/quit.ts): a pill in the top bar, right of 👥, and its question. */
+#quit-mission {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: calc(50% + 86px);
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.35);
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  #quit-mission .quit-long {
+    display: none;
+  }
+}
+
+#quit-confirm {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 20;
+}
+
+#quit-confirm.hidden {
+  display: none;
+}
+
+.quit-box {
+  width: min(86vw, 340px);
+  padding: 18px;
+  border-radius: 12px;
+  border: 2px solid #c79bff;
+  background: rgba(20, 14, 26, 0.96);
+  text-align: center;
+}
+
+.quit-box b {
+  font-size: 20px;
+}
+
+.quit-box p {
+  margin: 8px 0 16px;
+  opacity: 0.85;
+}
+
+.quit-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.quit-buttons button {
+  flex: 1;
+  min-height: 48px;
+  font: inherit;
+  font-weight: 800;
+  border-radius: 8px;
+  border: 1px solid #8a6bb3;
+  background: #2c2038;
+  color: #fff;
+  cursor: pointer;
+}
+
+.quit-buttons [data-yes] {
+  background: #7a2a3a;
+  border-color: #d06070;
+}
+
 .mission-clock {
   position: absolute;
   top: calc(max(10px, env(safe-area-inset-top)) + 40px);

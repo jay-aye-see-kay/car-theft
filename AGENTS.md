@@ -130,7 +130,8 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   with `players.max > 1` is shared: the room gathers at its marker, the host runs it with everyone as `players`,
   and guests mirror its `share()` state; solo ones run wherever they're started), `places.ts` (the gazetteer: `places.json` ids,
   typechecked, plus `nearest`/`random` by kind), `markers.ts` (start rings, goal beam),
-  `hud.ts` (banner, timer, objective, board; where to go is on the map). To add a mission: pick places from
+  `hud.ts` (banner, timer, objective, board; where to go is on the map), `quit.ts` (✕ Quit pill in the top bar or Q,
+  "are you sure?" with the game paused; `MissionRunner.cancel()` fails it, for the room too if you host it; guests can't). To add a mission: pick places from
   `public/city/cbd/places.json` or `__game.places('bar', { near: [x, z], within: 200 })`
   (pin a nicer id or name with `place` in the overrides), write the file, and play it
   through by teleporting in `scripts/smoke/areas/missions.mjs` (shared ones in `coop.mjs`, two tabs).
