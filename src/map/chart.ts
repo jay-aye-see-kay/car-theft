@@ -36,6 +36,8 @@ export interface Blip {
   label?: string;
   /** Pinned to the edge when outside the view (the minimap). */
   edge?: boolean;
+  /** Instead of the kind's colour. */
+  colour?: string;
 }
 
 /** The bearing of a direction in the ground plane: 0 north (-z), π/2 east (+x). */
@@ -151,7 +153,7 @@ export class Chart {
     ctx.translate(x, y);
     ctx.lineWidth = 2;
     ctx.strokeStyle = '#000';
-    ctx.fillStyle = BLIP[blip.kind];
+    ctx.fillStyle = blip.colour ?? BLIP[blip.kind];
     if (blip.kind === 'boat') {
       // A little hull, bow the way it's pointing: a boat to borrow.
       ctx.rotate((blip.facing ?? 0) - turn);

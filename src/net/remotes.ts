@@ -47,7 +47,7 @@ interface Remote {
   driving: boolean;
   speedKmh: number;
   /** The cops after them, as of the pose we're showing. */
-  cops: Pick<Pose, 'w' | 'k' | 'u'>;
+  cops: Pick<Pose, 'w' | 'n' | 'k' | 'u'>;
 }
 
 const _q = new THREE.Quaternion();
@@ -156,7 +156,7 @@ export class Remotes {
       const [x, y, z] = pose.p;
       r.at.set(x, y, z);
       r.driving = pose.c >= 0;
-      r.cops = { w: pose.w, k: pose.k, u: pose.u };
+      r.cops = { w: pose.w, n: pose.n, k: pose.k, u: pose.u };
       r.speedKmh = Math.hypot(...pose.v) * 3.6;
       if (r.car >= 0 && pose.q) {
         const body = this.cars[r.car].body;
@@ -211,7 +211,7 @@ export class Remotes {
   players(): MissionPlayer[] {
     const out: MissionPlayer[] = [];
     for (const r of this.remotes.values()) {
-      if (r.seen) out.push({ id: r.id, name: r.name, x: r.at.x, y: r.at.y, z: r.at.z, driving: r.driving, speedKmh: r.speedKmh });
+      if (r.seen) out.push({ id: r.id, name: r.name, x: r.at.x, y: r.at.y, z: r.at.z, driving: r.driving, speedKmh: r.speedKmh, heat: r.cops.w ?? 0, caught: !!r.cops.n });
     }
     return out;
   }

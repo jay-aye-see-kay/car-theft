@@ -67,7 +67,7 @@ export default {
     s = await press('KeyF', 30);
     check(boarded && s.mode === 'foot' && s.splashes === splashes && s.ground > 0.3, `get in and out of the ${back.kind} ${back.index} at its mooring without a swim (${s.mode} at ${s.speedKmh.toFixed(0)} km/h, ground ${s.ground.toFixed(1)} m)`);
 
-    // Harbour Dash: walk into the marker at the Viaduct, borrow a boat, and round the buoys to Mechanics Bay.
+    // Harbour Dash: walk into the marker at the Viaduct, borrow a boat, and round the buoys into the ferry basin.
     await game('reset');
     await quiet();
     const lookout = await game('place', 'the-lookout');
@@ -82,7 +82,7 @@ export default {
     await press('KeyF', 4);
     await step(60 * 4); // 3, 2, 1, go
     const legs = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       m = await game('missions');
       if (!m.target) break;
       legs.push(m.target.label);

@@ -35,6 +35,8 @@ export interface Pose {
    * officers [x, y, z, heading, bike, running]. Their client runs them.
    */
   w?: number;
+  /** Being given a talking-to by the cops. */
+  n?: number;
   k?: [number, number, number, number, number, number, number, number][];
   u?: [number, number, number, number, number, number][];
 }

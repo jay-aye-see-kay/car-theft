@@ -39,21 +39,21 @@ export const COPS = mechanic('cops', 'Cops', true, {
   hoonSpeed: knob(75, 'Hooning: faster than', 20, 200, 5, 'km/h'),
   heatHoon: knob(0.45, 'Heat: hooning (or skids), per second seen', 0, 3, 0.05),
   heatFlee: knob(0.06, 'Heat: getting away, per second seen', 0, 1, 0.01),
-  decay: knob(12, 'Drops a level after, out of sight', 2, 60, 1, 's'),
+  decay: knob(9, 'Drops a level after, out of sight', 2, 60, 1, 's'),
   beat: knob(1, 'Cops walking the beat', 0, 4, 1),
   bikes: knob(0.4, 'Share of them on bikes', 0, 1, 0.05),
-  patrols: knob(2, 'Patrol cars driving about', 0, 4, 1),
+  patrols: knob(1, 'Patrol cars driving about', 0, 4, 1),
   spawnDistance: knob(110, 'Chase cars come from', 50, 250, 10, 'm'),
   foot: knob(1, 'Level 1+: officers after you', 0, 3, 1),
   cars2: knob(1, 'Level 2: cars after you', 0, 4, 1),
-  cars3: knob(3, 'Level 3: cars after you', 0, 5, 1),
+  cars3: knob(2, 'Level 3: cars after you', 0, 5, 1),
   topSpeed: knob(26, 'Cop car top speed', 8, 50, 1, 'm/s'),
   aggression: knob(0.5, 'Aggression (cut in, nudge)', 0, 1, 0.05),
   runSpeed: knob(6.4, 'Running speed (bikes 1.5x)', 2, 10, 0.1, 'm/s'),
   tackleRange: knob(1.4, 'Tackle range', 0.5, 4, 0.1, 'm'),
   boxTime: knob(2, 'Boxed in: stopped by them for', 0.5, 8, 0.1, 's'),
   roadblocks: knob(1, 'Level 3: spikes and cones (1 on, 0 off)', 0, 1, 1),
-  roadblockEvery: knob(16, 'A roadblock every', 5, 60, 1, 's'),
+  roadblockEvery: knob(25, 'A roadblock every', 5, 60, 1, 's'),
   spikeSlow: knob(0.5, 'Spikes: power lost', 0, 0.9, 0.05),
   flatTime: knob(25, 'Spikes: flat for', 3, 120, 1, 's'),
   sceneTime: knob(4.5, 'Talking-to lasts', 1, 12, 0.5, 's'),
@@ -208,6 +208,7 @@ export interface Scene {
 /** What we tell the room: our level, chase cars [pose, rotation, siren], chasing officers [x, y, z, heading, bike, running]. */
 export interface CopsShare {
   w: number;
+  n?: number;
   k: [number, number, number, number, number, number, number, number][];
   u: [number, number, number, number, number, number][];
 }
@@ -1152,11 +1153,12 @@ export class Cops {
   }
 
   share(): CopsShare | null {
-    if (!COPS.on || (!this.cars.length && this.level === 0 && !this.officers.some((o) => o.chasing))) return null;
+    if (!COPS.on || (!this.cars.length && this.level === 0 && !this.scene && !this.officers.some((o) => o.chasing))) return null;
     const r2 = (n: number) => Math.round(n * 100) / 100;
     const r4 = (n: number) => Math.round(n * 10000) / 10000;
     return {
       w: this.level,
+      ...(this.scene ? { n: 1 } : {}),
       k: this.cars.map((c) => {
         const t = c.car.body.translation();
         const q = c.car.body.rotation();

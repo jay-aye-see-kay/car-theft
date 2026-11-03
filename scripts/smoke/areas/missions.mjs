@@ -46,8 +46,8 @@ export default {
 
     // At the spawn on Queen St, the Sky Tower sprint up the road is the nearest mission.
     let m = await missions();
-    const solo = m.missions.filter((x) => x.id !== 'last-orders');
-    check(solo.length >= 3 && m.starts.length === solo.length, `${m.missions.length} missions, a start marker for each but Last Orders (two or more) when alone: ${m.starts.map((x) => x.id).join(', ')}`);
+    const solo = m.missions.filter((x) => x.min === 1);
+    check(solo.length >= 3 && m.starts.length === solo.length && !m.starts.some((x) => x.id === 'last-orders'), `${m.missions.length} missions, a start marker for each of the ${solo.length} you can play alone: ${m.starts.map((x) => x.id).join(', ')}`);
     check(m.nearest?.id === 'sky-tower-sprint' && !m.active, `nearest to the spawn is ${m.nearest?.id}, nothing running`);
 
     // Near a marker, the hint names its mission.

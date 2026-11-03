@@ -1,4 +1,4 @@
-import type { BoardSection, Clock, GoToOptions, Mission, MissionApi, MissionPlayer } from './mission.ts';
+import type { BoardSection, Clock, GoToOptions, Mission, MissionApi, MissionPlayer, Prop, PropOptions, PropStyle } from './mission.ts';
 import type { Gazetteer, Place } from './places.ts';
 
 // Runs mission scripts against the game, a tick at a time in game time, so
@@ -38,6 +38,47 @@ const ASK_EVERY = 0.5;
 const MIRROR_SILENCE = 3;
 /** Cues kept in the shared state, so a guest hears each once though some states are lost. */
 const CUE_LOG = 8;
+/** Props: default size and colour by style. */
+const PROP_DEFAULTS: Record<PropStyle, { radius: number; colour: string }> = {
+  pad: { radius: 3, colour: '#ffc23d' },
+  gem: { radius: 2.5, colour: '#5fe8ff' },
+  siren: { radius: 3, colour: '#ff3b3b' },
+};
+const PROP_DRAW = 300;
+/** A carried prop rides this high over its carrier's feet (or a car's centre), m. */
+const CARRY_LIFT = { foot: 2.6, car: 2.2 };
+
+/** A prop as drawn: `y` null sits it on the ground. */
+export interface PropView {
+  x: number;
+  y: number | null;
+  z: number;
+  style: PropStyle;
+  colour: string;
+  radius: number;
+  label?: string;
+  draw: number;
+  /** Carried by this player id: a guest draws it over its own head from its own pose. */
+  carrier: number | null;
+}
+
+interface PropState {
+  x: number;
+  z: number;
+  style: PropStyle;
+  colour: string;
+  radius: number;
+  label?: string;
+  draw: number;
+  onFoot?: boolean;
+  carrier: number | null;
+  removed: boolean;
+}
+
+/** The roads, for MissionApi.route. */
+export interface MissionRoads {
+  route(from: { x: number; z: number }, to: { x: number; z: number }): { points: { x: number; z: number }[] } | null;
+}
 
 /** What the runner needs from the game each tick. */
 export interface Snapshot {
@@ -55,6 +96,9 @@ export interface Snapshot {
   /** Our id and name in the room. */
   id: number;
   name: string;
+  /** Our wanted level, and whether we're being given a talking-to. */
+  heat?: number;
+  caught?: boolean;
   /** Everyone else in the room. */
   others: readonly MissionPlayer[];
   /** In someone else's room: their shared missions are theirs to run. */
@@ -75,6 +119,13 @@ export interface SharedMission {
   cues: [number, Cue][];
   /** How the last shared mission ended, numbered. */
   last: { n: number; id: string; result: 'passed' | 'failed'; message: string } | null;
+  props?: PropView[];
+  /** Board sections for one player each. */
+  secrets?: { to: number; section: BoardSection }[];
+  /** Subtitles for one player each. */
+  whispers?: { to: number; text: string; left: number }[];
+  /** The last wanted level the mission set, numbered: for these player ids. */
+  heat?: { n: number; level: number; ids: number[] } | null;
 }
 
 /** What the HUD and markers draw. */
@@ -91,6 +142,8 @@ export interface MissionView {
   targets: { x: number; z: number; label: string }[];
   /** The nearest goal: the route on the map heads there. */
   target: { x: number; z: number; label: string } | null;
+  /** Pads, gems and the like the mission has put about. */
+  props: PropView[];
   /** Start markers to draw (idle only). */
   starts: { id: string; title: string; x: number; z: number }[];
   /** Nearest start (idle only): its blip clings to the minimap's rim. */
@@ -126,6 +179,9 @@ interface Run {
   objective: string;
   board: readonly BoardSection[];
   shared: boolean;
+  props: PropState[];
+  whispers: { to: number; text: string; until: number }[];
+  secrets: Map<number, BoardSection>;
 }
 
 export class MissionRunner {
@@ -165,12 +221,20 @@ export class MissionRunner {
 
   /** Ground height at a point, NaN where unknown. */
   private readonly groundAt: (x: number, z: number) => number;
+  private readonly roads: MissionRoads | null;
+  /** Host: the last wanted level a mission set, for the guests. */
+  private heatOrder: { n: number; level: number; ids: number[] } | null = null;
+  /** Guest: the last heat order heard. */
+  private heardHeat = 0;
+  /** A wanted level for the game to give us, taken each tick. */
+  private heatDue: number | null = null;
 
-  constructor(missions: readonly Mission[], places: Gazetteer, groundAt: (x: number, z: number) => number, storage: Storage | null) {
+  constructor(missions: readonly Mission[], places: Gazetteer, groundAt: (x: number, z: number) => number, storage: Storage | null, roads: MissionRoads | null = null) {
+    this.roads = roads;
     this.missions = missions;
     this.places = places;
     // Unknown ids throw here, at start-up, rather than when someone walks past.
-    this.starts = new Map(missions.map((m) => [m.id, places.get(m.start)]));
+    this.starts = new Map(missions.map((m) => [m.id, typeof m.start === 'string' ? places.get(m.start) : m.start]));
     this.groundAt = groundAt;
     this.storage = storage;
   }
@@ -183,7 +247,7 @@ export class MissionRunner {
   tick(s: Snapshot): void {
     if (s.clock < this.asked) this.asked = -Infinity; // reset
     this.now = s.clock;
-    this.me = { id: s.id, name: s.name, x: s.x, y: s.y, z: s.z, driving: s.driving, boat: !!s.boat, speedKmh: s.speedKmh };
+    this.me = { id: s.id, name: s.name, x: s.x, y: s.y, z: s.z, driving: s.driving, boat: !!s.boat, speedKmh: s.speedKmh, heat: s.heat ?? 0, caught: !!s.caught };
     this.others = s.others;
     this.guest = s.guest;
     if (this.banner && this.now > this.banner.until) this.banner = null;
@@ -227,6 +291,9 @@ export class MissionRunner {
     this.requests = [];
     this.asked = -Infinity;
     this.armed.clear();
+    this.heatOrder = null;
+    this.heardHeat = 0;
+    this.heatDue = null;
     this.banner = this.subtitle = this.last = null;
     this.said.length = 0;
     this.hint = '';
@@ -247,6 +314,13 @@ export class MissionRunner {
     this.begin(mission);
   }
 
+  /** A wanted level a mission has given us since the last call (the game sets it), or null. */
+  takeHeat(): number | null {
+    const h = this.heatDue;
+    this.heatDue = null;
+    return h;
+  }
+
   /** Guest: shared missions to ask the host for, since the last call. */
   takeRequests(): string[] {
     const r = this.requests;
@@ -264,11 +338,15 @@ export class MissionRunner {
       banner: this.banner && { title: this.banner.title, text: this.banner.text, kind: this.banner.kind, left: this.banner.until - this.now },
       subtitle: run && this.subtitle && { text: this.subtitle.text, left: this.subtitle.until - this.now },
       objective: v.objective,
-      board: v.board,
+      board: run?.board ?? [],
       clock: v.clock,
       targets: v.targets,
       cues: this.cueLog,
       last: this.sharedLast,
+      props: v.props,
+      secrets: run ? [...run.secrets].map(([to, section]) => ({ to, section })) : [],
+      whispers: run ? run.whispers.filter((w) => w.until > this.now).map((w) => ({ to: w.to, text: w.text, left: w.until - this.now })) : [],
+      heat: this.heatOrder,
     };
   }
 
@@ -283,6 +361,12 @@ export class MissionRunner {
     }
     this.heardCue = Math.max(this.heardCue, ...state.cues.map(([n]) => n));
     if (state.subtitle && state.subtitle.text !== prev?.subtitle?.text) this.said.push(state.subtitle.text);
+    const mine = state.whispers?.find((w) => w.to === this.me.id);
+    if (mine && mine.text !== prev?.whispers?.find((w) => w.to === this.me.id)?.text) this.said.push(mine.text);
+    if (state.heat && state.heat.n > this.heardHeat) {
+      this.heardHeat = state.heat.n;
+      if (state.heat.ids.includes(this.me.id)) this.heatDue = state.heat.level;
+    }
     if (state.last && state.last.n !== this.heardLast) {
       this.heardLast = state.last.n;
       this.last = { id: state.last.id, result: state.last.result, message: state.last.message };
@@ -305,15 +389,17 @@ export class MissionRunner {
     if (mirror && this.following()) {
       const { state } = mirror;
       const banner = shownBanner;
+      const whisper = state.whispers?.find((w) => w.to === this.me.id && w.left - age > 0);
       return {
         active: state.id,
         banner,
-        subtitle: state.subtitle && state.subtitle.left - age > 0 ? state.subtitle.text : null,
+        subtitle: whisper?.text ?? (state.subtitle && state.subtitle.left - age > 0 ? state.subtitle.text : null),
         objective: state.objective,
-        board: state.board ?? [],
+        board: [...(state.board ?? []), ...(state.secrets ?? []).filter((x) => x.to === this.me.id).map((x) => x.section)],
         clock: state.clock && { seconds: state.clock.seconds + (state.clock.down ? -age : age), down: state.clock.down },
         targets: state.targets,
         target: this.nearestOf(state.targets),
+        props: (state.props ?? []).map((p) => (p.carrier === this.me.id ? { ...p, ...this.carriedAt(this.me) } : p)),
         starts: [],
         nearest: null,
         hint: '',
@@ -332,10 +418,11 @@ export class MissionRunner {
       banner: this.banner ?? shownBanner,
       subtitle: this.subtitle?.text ?? null,
       objective: run?.objective ?? '',
-      board: run?.board ?? [],
+      board: run ? [...run.board, ...(run.secrets.has(this.me.id) ? [run.secrets.get(this.me.id)!] : [])] : [],
       clock: run?.clock ? { seconds: run.clock.down ? run.clock.from - this.now : this.now - run.clock.from, down: run.clock.down } : null,
       targets: run ? run.targets.map((p) => ({ x: p.x, z: p.z, label: p.name })) : [],
       target: run ? this.nearestOf(run.targets.map((p) => ({ x: p.x, z: p.z, label: p.name }))) : null,
+      props: run ? this.propViews(run) : [],
       starts,
       nearest,
       hint: this.hint,
@@ -344,7 +431,20 @@ export class MissionRunner {
 
   /** ?debug: the view plus how the last mission went and everything said. */
   debugState() {
-    return { ...this.view(), last: this.last, said: [...this.said], missions: this.missions.map((m) => ({ id: m.id, title: m.title, start: this.startOf(m) })) };
+    return { ...this.view(), last: this.last, said: [...this.said], missions: this.missions.map((m) => ({ id: m.id, title: m.title, start: this.startOf(m), min: m.players?.min ?? 1 })) };
+  }
+
+  private propViews(run: Run): PropView[] {
+    const everyone = this.playersOf(run.mission);
+    return run.props.filter((p) => !p.removed).map((p) => {
+      const c = p.carrier === null ? null : everyone.find((q) => q.id === p.carrier);
+      const at = c ? this.carriedAt(c) : { x: p.x, y: null, z: p.z };
+      return { ...at, style: p.style, colour: p.colour, radius: p.radius, label: p.label, draw: p.draw, carrier: c ? c.id : null };
+    });
+  }
+
+  private carriedAt(p: MissionPlayer): { x: number; y: number; z: number } {
+    return { x: p.x, y: p.y + (p.driving ? CARRY_LIFT.car : CARRY_LIFT.foot), z: p.z };
   }
 
   private startOf(m: Mission): Place {
@@ -417,7 +517,7 @@ export class MissionRunner {
   }
 
   private begin(mission: Mission): void {
-    const run: Run = { mission, started: this.now, pending: [], guards: [], crash: [], deadlines: [], clock: null, targets: [], objective: '', board: [], shared: shared(mission) };
+    const run: Run = { mission, started: this.now, pending: [], guards: [], crash: [], deadlines: [], clock: null, targets: [], objective: '', board: [], shared: shared(mission), props: [], whispers: [], secrets: new Map() };
     this.run = run;
     this.armed.set(mission.id, false);
     this.subtitle = null;
@@ -546,6 +646,59 @@ export class MissionRunner {
           if (run.clock === c) run.clock = null;
           run.deadlines = run.deadlines.filter((d) => d !== deadline);
         },
+        add: (seconds) => {
+          c.from += seconds;
+          if (deadline) deadline.at += seconds;
+        },
+      };
+    };
+    const makeProp = (at: { x: number; z: number }, o: PropOptions): Prop => {
+      const style = o.style ?? 'pad';
+      const st: PropState = {
+        x: at.x, z: at.z, style, colour: o.colour ?? PROP_DEFAULTS[style].colour, radius: o.radius ?? PROP_DEFAULTS[style].radius,
+        label: o.label, draw: o.draw ?? PROP_DRAW, onFoot: o.onFoot, carrier: null, removed: false,
+      };
+      run.props.push(st);
+      const carrier = () => (st.carrier === null ? null : players().find((q) => q.id === st.carrier) ?? null);
+      return {
+        get x() {
+          return carrier()?.x ?? st.x;
+        },
+        get z() {
+          return carrier()?.z ?? st.z;
+        },
+        get radius() {
+          return st.radius;
+        },
+        get removed() {
+          return st.removed;
+        },
+        get carrier() {
+          return carrier();
+        },
+        move: (x, z) => {
+          st.x = x;
+          st.z = z;
+        },
+        setColour: (c) => (st.colour = c),
+        setLabel: (l) => (st.label = l),
+        carry: (p) => {
+          const c = carrier();
+          if (c) [st.x, st.z] = [c.x, c.z];
+          st.carrier = p ? p.id : null;
+        },
+        who: (among) => {
+          if (st.removed) return [];
+          const c = carrier();
+          const x = c?.x ?? st.x;
+          const z = c?.z ?? st.z;
+          return (among ? players().filter((p) => among.some((q) => q.id === p.id)) : players()).filter((p) =>
+            Math.hypot(p.x - x, p.z - z) < st.radius && (o.onFoot === undefined || o.onFoot !== p.driving) && this.grounded(p));
+        },
+        remove: () => {
+          st.removed = true;
+          run.props = run.props.filter((q) => q !== st);
+        },
       };
     };
     const api: MissionApi = {
@@ -571,6 +724,48 @@ export class MissionRunner {
         live();
         run.board = sections.map((b) => ({ title: b.title, rows: b.rows.map((r) => ({ ...r })) }));
       },
+      tell: (to, text, seconds = 4) => {
+        live();
+        if (to.id === this.me.id) {
+          this.subtitle = { text, until: this.now + seconds };
+          this.said.push(text);
+          return;
+        }
+        run.whispers = run.whispers.filter((w) => w.to !== to.id && w.until > this.now);
+        run.whispers.push({ to: to.id, text, until: this.now + seconds });
+      },
+      secret: (to, section) => {
+        live();
+        if (section) run.secrets.set(to.id, { title: section.title, rows: section.rows.map((r) => ({ ...r })) });
+        else run.secrets.delete(to.id);
+      },
+      prop: (at, o = {}) => {
+        live();
+        return makeProp(at, o);
+      },
+      pickup: async (at, o = {}) => {
+        const prop = makeProp(at, { style: 'gem', ...o });
+        let who: MissionPlayer | undefined;
+        try {
+          await wait(() => !!(who = prop.who(o.among)[0]));
+        } finally {
+          prop.remove();
+        }
+        this.cue(run, 'reached');
+        return who!;
+      },
+      setHeat: (level, ps) => {
+        live();
+        const ids = (ps ?? players()).map((p) => p.id);
+        if (ids.includes(this.me.id)) this.heatDue = level;
+        this.heatOrder = { n: (this.heatOrder?.n ?? 0) + 1, level, ids };
+      },
+      ground: (x, z) => this.groundAt(x, z),
+      route: (from, to) => {
+        const r = this.roads?.route(from, to);
+        return r ? r.points.map((p) => ({ x: p.x, z: p.z })) : null;
+      },
+      rand: () => rng(),
       place: (id) => this.places.get(id),
       nearest: (kind, near, q) => this.places.nearest(kind, near ?? this.me, q),
       random: (kind, q = {}) => this.places.random(kind, rng, { near: this.me, ...q }),
@@ -581,6 +776,14 @@ export class MissionRunner {
         unmark(place);
         this.cue(run, 'reached');
         return who;
+      },
+      beam: (target) => {
+        live();
+        const place = resolve(target);
+        if (!run.targets.includes(place)) run.targets.push(place);
+        return () => {
+          if (this.run === run) run.targets = run.targets.filter((p) => p !== place);
+        };
       },
       race: async (racers, target, o) => {
         const place = resolve(target);
@@ -606,6 +809,10 @@ export class MissionRunner {
         live();
         const at = this.now + seconds;
         return clock(at, true, { at, expire: () => this.fail(run, message) });
+      },
+      countdown: (seconds) => {
+        live();
+        return clock(this.now + seconds, true);
       },
       stopwatch: () => {
         live();

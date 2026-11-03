@@ -22,7 +22,7 @@ import { Sky } from './sky.ts';
 import { SUN_DIRECTION } from './sun.ts';
 import { Splash } from './splash.ts';
 import { onKerb, PARKED_POOL, PATROL_POOL, Town, TRAFFIC_POOL } from './traffic.ts';
-import { Cops, type Suspect } from './cops/cops.ts';
+import { COPS, Cops, type Suspect } from './cops/cops.ts';
 import { CopsHud } from './cops/hud.ts';
 import { CopsMesh } from './cops/cops-mesh.ts';
 import { RemoteCops } from './cops/remote-cops.ts';
@@ -266,7 +266,7 @@ async function main() {
 
   // Missions: Auckland only, since their places are real streets (the map's gazetteer).
   // Out on the harbour, the ground is the water's surface (a boat's on it, not 8 m above the sea floor).
-  const missions = map.places ? new MissionRunner(MISSIONS, map.places, (x, z) => Math.max(map.heightAt(x, z), map.water?.level ?? -Infinity), storage) : null;
+  const missions = map.places ? new MissionRunner(MISSIONS, map.places, (x, z) => Math.max(map.heightAt(x, z), map.water?.level ?? -Infinity), storage, map.roads ?? null) : null;
   const markers = new MissionMarkers();
   scene.add(markers.group);
   const missionHud = new MissionHud(hud);
@@ -1245,10 +1245,14 @@ async function main() {
       const at = driving ? driving.body.translation() : boating ? boating.body.translation() : player.body.translation();
       const alone = room.role === 'solo';
       missions.tick({
-        clock, x: at.x, y: at.y, z: at.z, driving: !!driving || !!boating, boat: !!boating, speedKmh: driving ? Math.abs(driving.forwardSpeed()) * 3.6 : boating ? Math.abs(boating.forwardSpeed()) * 3.6 : 0, crash,
+        clock, x: at.x, y: at.y, z: at.z, driving: !!driving || !!boating, boat: !!boating, speedKmh: driving ? Math.abs(driving.forwardSpeed()) * 3.6 : boating ? Math.abs(boating.forwardSpeed()) * 3.6 : player.speed * 3.6, crash,
+        heat: cops?.level ?? 0, caught: !!cops?.scene,
         id: room.myId, name: alone ? 'You' : room.name, others: alone ? [] : remotes.players(), guest: room.role === 'guest',
       });
       for (const cue of missions.takeCues()) audio.cue(cue);
+      // A mission made us wanted (or let us off): as if a cop just saw us here.
+      const heat = missions.takeHeat();
+      if (heat !== null && cops && COPS.on) cops.setHeat(heat, at);
       for (const id of missions.takeRequests()) room.requestMission(id);
       // The shared mission to the guests, a few times a second (game time, so stepped tests send it too).
       if (clock < lastShared) lastShared = -Infinity;
@@ -1313,6 +1317,7 @@ async function main() {
     if (view) {
       for (const s of view.starts) out.push({ kind: 'mission', x: s.x, z: s.z, label: full ? s.title : undefined, edge: s === view.nearest });
       for (const t of view.targets) out.push({ kind: 'goal', x: t.x, z: t.z, label: full ? t.label : undefined, edge: true });
+      for (const p of view.props) if (p.label) out.push({ kind: 'prop', colour: p.colour, x: p.x, z: p.z, label: full ? p.label : undefined, edge: p.style !== 'pad' });
     }
     // Boats to borrow (not the one you're in).
     for (const b of boats) {

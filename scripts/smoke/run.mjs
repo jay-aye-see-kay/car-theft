@@ -27,6 +27,8 @@ import fly from './areas/fly.mjs';
 import harbour from './areas/harbour.mjs';
 import boats from './areas/boats.mjs';
 import missions from './areas/missions.mjs';
+import labMissions from './areas/lab-missions.mjs';
+import labCoop from './areas/lab-coop.mjs';
 import roads from './areas/roads.mjs';
 import budget from './areas/budget.mjs';
 import rooms from './areas/rooms.mjs';
@@ -41,7 +43,7 @@ import cops from './areas/cops.mjs';
 import mapArea from './areas/map.mjs';
 
 /** In running order. Areas on the same page share it, each starting from __game.reset(). */
-const AREAS = [core, walls, terrain, trees, parks, parked, drive, bridges, buildings, aotea, fly, harbour, boats, budget, missions, mapArea, roads, dizzy, peds, traffic, cops, rooms, coop, realtime, testTown, phone, tweaks];
+const AREAS = [core, walls, terrain, trees, parks, parked, drive, bridges, buildings, aotea, fly, harbour, boats, budget, missions, labMissions, mapArea, roads, dizzy, peds, traffic, cops, rooms, coop, labCoop, realtime, testTown, phone, tweaks];
 
 const PORT = 4179;
 const URL = `http://localhost:${PORT}/?debug`;

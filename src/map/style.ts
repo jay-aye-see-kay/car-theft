@@ -16,4 +16,4 @@ export const ROAD_EDGE = '#14161a';
 /** The planned route. */
 export const ROUTE = '#c79bff';
 /** Blips. */
-export const BLIP = { player: '#ffffff', mission: '#ffc23d', goal: '#ff5fc8', waypoint: '#c79bff', remote: '#5fd3ff', boat: '#7fe8c4' } as const;
+export const BLIP = { player: '#ffffff', mission: '#ffc23d', goal: '#ff5fc8', waypoint: '#c79bff', remote: '#5fd3ff', boat: '#7fe8c4', prop: '#5fe8ff' } as const;

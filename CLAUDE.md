@@ -115,6 +115,11 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   `public/city/cbd/places.json` or `__game.places('bar', { near: [x, z], within: 200 })`
   (pin a nicer id or name with `place` in the overrides), write the file, and play it
   through by teleporting in `scripts/smoke/areas/missions.mjs` (shared ones in `coop.mjs`, two tabs).
+  The mission lab (`docs/MISSIONS.md`: six kinds, three each, mostly for rooms; no knowing the city, nothing long
+  and straight): props (`m.prop`: pads, gems, sirens; `who()`, `carry(player)`; two instanced calls in `markers.ts`,
+  only when there are any), `pickup`, `beam`, `tell`/`secret` (one player's subtitle or board), `setHeat` for anyone
+  in the room (`MissionPlayer.heat`, `caught`), `countdown`, `route`, `rand`; helpers in `runtime/kit.ts` (`every`
+  for loops beside a script, `hotCold`, `spot` for a start of its own). Smoke: `lab-missions.mjs`, `lab-coop.mjs`.
 - `src/net/`: rooms (#26) over PeerJS (its free broker and TURN; `?turn=off` for STUN only). `room.ts`
   (host/guest star: the host relays, poses at 15 Hz, host leaving dissolves the room), `remotes.ts` (others
   drawn ~0.12 s behind, interpolated; a parked car someone else drives turns kinematic and follows them),
