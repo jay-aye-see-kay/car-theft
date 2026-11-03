@@ -2,13 +2,13 @@
 
 GTA III-flavoured driving game set in the real Auckland CBD (and Parnell, out to Hobson Bay), in the browser on
 phones and desktop. Three.js + Rapier (WASM physics) + TypeScript + Vite,
-deployed to GitHub Pages. Goal and data sources: `docs/BRIEF.md`.
+deployed to Cloudflare Pages. Goal and data sources: `docs/BRIEF.md`.
 
 **Backlog is GitHub issues** on `jay-aye-see-kay/grand-theft-auckland`
 (labels: `next`, `later`, `parked`, `needs-owner`, `blocked`, plus areas). Read
 the issue you're working on, leave short progress notes there as comments if
 you stop partway, and close it with `closes #N` in the commit or PR. Live:
-https://jay-aye-see-kay.github.io/grand-theft-auckland/ (`?debug` for perf overlay and test hooks).
+https://cartheft.net/ (`?debug` for perf overlay and test hooks).
 
 ## Commands
 
@@ -25,8 +25,10 @@ npm run citygen:roadgraph  # just the road graph (roadgraph.json)
 npm run citygen:map     # just the map picture (map.png), from the committed chunks
 ```
 
-CI (`.github/workflows/deploy.yml`) only builds and deploys from the default
-branch; it does not run sim or smoke, so run them before pushing. New features
+CI (`.github/workflows/cloudflare.yml`) builds and deploys every pushed branch to
+Cloudflare Pages: `main` to https://cartheft.net/, others to a preview at
+`https://<branch>.cartheft.pages.dev` (slashes become dashes; the URL is in the run
+summary). It does not run sim or smoke, so run them before pushing. New features
 get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
 
 ## Layout
