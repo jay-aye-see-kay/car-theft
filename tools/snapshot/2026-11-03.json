@@ -1,0 +1,183 @@
+{
+  "id": "2026-11-03",
+  "created": "2026-11-03",
+  "files": {
+    "osm/bbbike-auckland-2026-10-31.osm.pbf": {
+      "bytes": 72638305,
+      "sha256": "1617a838c6f599f3df494a8d9150a6680c49ad96f510478a41397e45acf6e33b",
+      "url": "https://download.bbbike.org/osm/bbbike/Auckland/Auckland.osm.pbf",
+      "licence": "ODbL 1.0: © OpenStreetMap contributors",
+      "note": "BBBike's Auckland extract (urban area), dated by its Last-Modified"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/collection.json": {
+      "bytes": 24244,
+      "sha256": "3191d5d3d71b711dd77a846acd9c1bf3051460c9a3ebcb4b3bb9ed53a4373e55",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/collection.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA31_10000_0405.tiff": {
+      "bytes": 32719018,
+      "sha256": "05b2b4f4e9f9e8f44446f50526c6257fca17f654a4ed694e5a5099cb91cac14f",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA31_10000_0405.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA31_10000_0405.json": {
+      "bytes": 1493,
+      "sha256": "7082dbc2050063d3d1b35059e62d04d242a8c6541822f4fac87dff1c8a7aec7b",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA31_10000_0405.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA31_10000_0505.tiff": {
+      "bytes": 44409844,
+      "sha256": "752e08ed6ca0860a1095b6aefac16fa896afd6e58c7e001baafaab7c536d331c",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA31_10000_0505.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA31_10000_0505.json": {
+      "bytes": 1489,
+      "sha256": "33aedc8f818972db7c6c00eb8747690b0ea914887906445a71a95f958131f443",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA31_10000_0505.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA32_10000_0401.tiff": {
+      "bytes": 33265079,
+      "sha256": "06b2c8bd1cf34188e2a20886dfb1069083a31198d4ec7d2f8482cf1e94090b92",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0401.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA32_10000_0401.json": {
+      "bytes": 1495,
+      "sha256": "ab68f761dba878b649c28ead9d3f0c9396683740193486ba6cdec95e3e812cb5",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0401.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA32_10000_0402.tiff": {
+      "bytes": 23557956,
+      "sha256": "93b9d6d70af03355225dd331c625bdbde00c53584573c4d6607f391eab551ebe",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0402.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA32_10000_0402.json": {
+      "bytes": 1495,
+      "sha256": "f3a2ba4f2a8b0549a6283c2742d3c97f947a2a1f7bc5067632506c7393937573",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0402.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA32_10000_0501.tiff": {
+      "bytes": 43267064,
+      "sha256": "b1a615e08966d6d04c875e77b558a8985ed0be8b419faa0388134c84ac234e45",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0501.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA32_10000_0501.json": {
+      "bytes": 1495,
+      "sha256": "3b9f641ce384d9428f4f6c7b3630c1585269e325c05468a13415eb30382f93e4",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0501.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA32_10000_0502.tiff": {
+      "bytes": 44333159,
+      "sha256": "8648558e01a9bd6b927fc2fffc4c780d9ec7a3142fa67f3fcb8f1b5d9f505e90",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0502.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dem_1m/2193/BA32_10000_0502.json": {
+      "bytes": 1495,
+      "sha256": "0cc0f2e68731d574d7bc07b273b91ff76195507e80d076888977a241001a8cee",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dem_1m/2193/BA32_10000_0502.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/collection.json": {
+      "bytes": 24242,
+      "sha256": "5844090f898ad4036dd13c913fdc6732a305bfcc011c511a647a19378a750d5e",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/collection.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA31_10000_0405.tiff": {
+      "bytes": 41433557,
+      "sha256": "ce05335195e9f0b1ac7e30b114f10336db9290dcabee89a298462c260d5c2475",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA31_10000_0405.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA31_10000_0405.json": {
+      "bytes": 1491,
+      "sha256": "ab91c220b9806856767d419171ff1946fb706f8565a95748a8350fbfaa320f9d",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA31_10000_0405.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA31_10000_0505.tiff": {
+      "bytes": 56809460,
+      "sha256": "8c4600a6ed21c527a34fed70d26c6875133bd44ff246ff403328923cdc588862",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA31_10000_0505.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA31_10000_0505.json": {
+      "bytes": 1487,
+      "sha256": "6c73f896a127c8c9d2971fec3484e1934f2c26c29ab1b35fb0e24b96ef82debd",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA31_10000_0505.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0401.tiff": {
+      "bytes": 43235618,
+      "sha256": "6d13c7e242b7f9b50170e36a09efb0216c0d236e358a0e0764d91337847b7206",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0401.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0401.json": {
+      "bytes": 1493,
+      "sha256": "1f1338cc90d4cf253c406537bc84c52388a97d9cd389ee91bccd49646deb96c3",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0401.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0402.tiff": {
+      "bytes": 30312516,
+      "sha256": "105e109d5ab7de798bf90a28873efb77168b0b1aafeb7280122154cd5b748c3c",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0402.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0402.json": {
+      "bytes": 1493,
+      "sha256": "f87ab96e54f40a12a4f3ac6ea0fa3eba51e1371dd1c38a0a0edb771ad5428a37",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0402.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0501.tiff": {
+      "bytes": 56220110,
+      "sha256": "e547d43cb2223b07408406019e7d6ab243e2ab8afd2d7bc465eac3e4213381c0",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0501.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0501.json": {
+      "bytes": 1493,
+      "sha256": "73b5d9f9a37fa6e51aef416132fca3021073937a094468dd5f24f7a671b28c84",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0501.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0502.tiff": {
+      "bytes": 57987605,
+      "sha256": "72daa8fad8fc44de0b54ea3356696f1fa598846d99298b63e47d0daa67e5edc4",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0502.tiff",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "linz/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0502.json": {
+      "bytes": 1493,
+      "sha256": "fba3962e42c15dd800edd2152607a6e260bf553f4f4e8bf4604a87ff3d5c7da6",
+      "url": "https://nz-elevation.s3.ap-southeast-2.amazonaws.com/auckland/auckland-part-1_2024/dsm_1m/2193/BA32_10000_0502.json",
+      "licence": "CC BY 4.0: contains data sourced from the LINZ Data Service"
+    },
+    "v1/citygen-cache-v1.tar.zst": {
+      "bytes": 64588387,
+      "sha256": "37de2f6b1ddf8d18ce8988bd34170a1238f73ae911c3d245740e98e7a0b846a9",
+      "url": "",
+      "licence": "ODbL 1.0: © OpenStreetMap contributors; CC BY 4.0: contains data sourced from the LINZ Data Service",
+      "note": "v1 citygen's .cache/citygen (OSM API tiles, DEM/DSM windows for the CBD), so v1 can still be rebuilt: tar -xf with --zstd at the repo root"
+    },
+    "v1/wikidata-cbd.json": {
+      "bytes": 7793,
+      "sha256": "5afcb8f0babc62780ca7c699dc6d64e233012632e955af011e91d289ab988e9a",
+      "url": "https://query.wikidata.org/sparql",
+      "licence": "CC0: Wikidata",
+      "note": "tools/citygen/data/wikidata-cbd.json as of this snapshot"
+    }
+  }
+}

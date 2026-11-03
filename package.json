@@ -17,7 +17,9 @@
     "citygen:places": "node --experimental-strip-types tools/citygen/places.ts",
     "citygen:roadgraph": "node --experimental-strip-types tools/citygen/roadgraph.ts",
     "citygen:map": "node --experimental-strip-types tools/citygen/map.ts",
-    "citygen:build": "NODE_USE_ENV_PROXY=1 node --experimental-strip-types tools/citygen/build.ts"
+    "citygen:build": "NODE_USE_ENV_PROXY=1 node --experimental-strip-types tools/citygen/build.ts",
+    "snapshot": "node --experimental-strip-types tools/snapshot/snapshot.ts",
+    "citygen2": "node --experimental-strip-types --max-old-space-size=8000 tools/citygen2/build.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d": "^0.21.0",
