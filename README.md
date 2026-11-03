@@ -9,7 +9,7 @@ waterfront, generated from OpenStreetMap and LINZ LiDAR. Spawn on Queen St at Ao
 
 ## Play
 
-https://jay-aye-see-kay.github.io/grand-theft-auckland/ (add `?debug` for a
+https://cartheft.net/ (add `?debug` for a
 performance overlay, `?map=test` for the old test town).
 
 | | Keyboard | Touch | Gamepad |
@@ -76,8 +76,11 @@ Project structure and conventions: [CLAUDE.md](CLAUDE.md).
 
 ## Deploying
 
-`.github/workflows/deploy.yml` builds and publishes to GitHub Pages. One-time
-setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+`.github/workflows/cloudflare.yml` builds every pushed branch and uploads it to the
+`cartheft` Cloudflare Pages project with `wrangler pages deploy` (no server-side
+code). `main` is production at https://cartheft.net/; any other branch gets a preview
+at `https://<branch>.cartheft.pages.dev`. It needs repo secrets
+`CLOUDFLARE_API_TOKEN` (Account → Cloudflare Pages → Edit) and `CLOUDFLARE_ACCOUNT_ID`.
 
 ## Attribution
 
