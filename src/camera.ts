@@ -1,11 +1,14 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
+import { LOOK } from './input.ts';
 import { tune, type KnobSpec } from './tweaks.ts';
 
 // GTA III-style follow camera: sits behind the target's heading, swings round
 // lazily, pulls back and widens the FOV with speed, and ducks in front of
 // walls instead of clipping through them. Profiles switch between driving and
 // on-foot framing; the smoothing makes the switch a glide rather than a cut.
+// You can look round it (mouse, drag, right stick), up and down too; once you
+// leave it alone for LOOK.recentreDelay it eases back behind (GTA V on PC).
 
 export interface CameraProfile {
   distance: number;
@@ -64,6 +67,11 @@ const _toCam = new THREE.Vector3();
 const _up = { x: 0, y: 1, z: 0 };
 /** How far under a ceiling the camera keeps, m (well past the near plane). */
 const CEILING_GAP = 0.6;
+/** Camera elevation about the target, radians: from just under it (looking up) to well above. */
+const MIN_ELEVATION = -0.2;
+const MAX_ELEVATION = 1.1;
+/** Past MIN_ELEVATION, looking further up tilts the view instead of lowering the camera. */
+const MAX_TILT = 0.75;
 
 export class ChaseCamera {
   private yawAngle: number | null = null;
@@ -76,6 +84,16 @@ export class ChaseCamera {
   private swayAmount = 0;
   private swayTime = 0;
   private distance = DRIVING.distance;
+  /** Look up (-) or down (+) from the profile's framing, radians. */
+  private pitch = 0;
+  /** Seconds since you last looked round by hand. */
+  private sinceLook = Infinity;
+  /** How far the follow is back on: 0 just after you look, 1 fully following. */
+  private follow = 1;
+  private wasBehind = false;
+  private viewYaw = 0;
+  /** Wheel zoom: multiplies the profile's distance behind. */
+  zoom = 1;
 
   constructor(camera: THREE.PerspectiveCamera, world: RAPIER.World) {
     this.camera = camera;
@@ -84,9 +102,25 @@ export class ChaseCamera {
 
   /** Direction the camera faces, as atan2(z, x). Used for camera-relative walking. */
   get yaw(): number {
-    return this.yawAngle ?? 0;
+    if (this.yawAngle === null) return 0;
+    return this.wasBehind ? this.viewYaw : this.yawAngle;
   }
 
+  /** Looked round by hand and not yet fully back behind. */
+  get looking(): boolean {
+    return this.follow < 1;
+  }
+
+  /** ?debug: the look state. */
+  debug(): { yaw: number; pitch: number; follow: number; sinceLook: number } {
+    return { yaw: this.yaw, pitch: this.pitch, follow: this.follow, sinceLook: this.sinceLook };
+  }
+
+  /**
+   * `follow`: whether the camera may swing in behind the target now (it
+   * still waits for LOOK.recentreDelay after you last looked). `behind`:
+   * look back over your shoulder (snaps there and back).
+   */
   update(
     dt: number,
     profile: CameraProfile,
@@ -95,30 +129,57 @@ export class ChaseCamera {
     speed: number,
     ignore: RAPIER.Collider,
     follow = true,
+    behind = false,
   ): void {
     // heading rotates local +x about +y, so forward is (cos h, 0, -sin h).
     const targetYaw = Math.atan2(-Math.sin(heading), Math.cos(heading));
     if (this.yawAngle === null) this.yawAngle = targetYaw;
-    if (follow) {
-      const delta = Math.atan2(Math.sin(targetYaw - this.yawAngle), Math.cos(targetYaw - this.yawAngle));
-      this.yawAngle += delta * (1 - Math.exp(-dt * profile.followRate));
+    this.sinceLook += dt;
+    if (follow && LOOK.recentreDelay > 0 && this.sinceLook >= LOOK.recentreDelay) {
+      this.follow = Math.min(1, this.follow + dt / Math.max(LOOK.recentreTime, 0.01));
     }
+    // Ease in (smoothstep) so it starts back gently rather than with a jerk.
+    const f = this.follow * this.follow * (3 - 2 * this.follow);
+    if (follow && f > 0) {
+      const delta = Math.atan2(Math.sin(targetYaw - this.yawAngle), Math.cos(targetYaw - this.yawAngle));
+      this.yawAngle += delta * (1 - Math.exp(-dt * profile.followRate * f));
+    }
+    if (f > 0) this.pitch *= Math.exp(-dt * 3 * f);
+
+    // Looking behind: straight back past the target, level, and a cut both ways
+    // (swinging round would pass through the car).
+    if (behind !== this.wasBehind) this.smoothedPos.set(0, 0, 0);
+    this.wasBehind = behind;
+    const yaw = behind ? targetYaw + Math.PI : this.yawAngle;
+    this.viewYaw = yaw;
 
     const s = Math.abs(speed);
-    const wantDistance = profile.distance + Math.min(s * profile.speedPullback, 3.5);
+    const wantDistance = profile.distance * this.zoom + Math.min(s * profile.speedPullback, 3.5);
     this.distance += (wantDistance - this.distance) * (1 - Math.exp(-dt * 3));
     const height = profile.height + Math.min(s * 0.02, 1);
-    const dir = _fwd.set(Math.cos(this.yawAngle), 0, Math.sin(this.yawAngle));
-    _look.copy(target).addScaledVector(dir, profile.lookAhead).y += profile.lookHeight;
-    _desired.copy(target).addScaledVector(dir, -this.distance).y += height;
+    // Orbit about a point above the target: the profile's framing is one
+    // elevation; looking up or down moves the camera round from there.
+    const rise = height - profile.lookHeight;
+    const reach = Math.hypot(this.distance, rise);
+    const framing = Math.atan2(rise, this.distance);
+    // Keep the pitch within what shows, so looking back the other way answers at once.
+    this.pitch = Math.max(MIN_ELEVATION - MAX_TILT - framing, Math.min(MAX_ELEVATION - framing, this.pitch));
+    const wanted = framing + (behind ? 0 : this.pitch);
+    const elevation = Math.min(MAX_ELEVATION, Math.max(MIN_ELEVATION, wanted));
+    const tilt = Math.min(MAX_TILT, Math.max(0, MIN_ELEVATION - wanted));
+    const dir = _fwd.set(Math.cos(yaw), 0, Math.sin(yaw));
+    const back = reach * Math.cos(elevation);
+    const up = reach * Math.sin(elevation);
+    _look.copy(target).addScaledVector(dir, profile.lookAhead).y += profile.lookHeight + Math.tan(tilt) * (back + profile.lookAhead);
+    _desired.copy(target).addScaledVector(dir, -back).y += profile.lookHeight + up;
 
     // Pull in if a building is between the target and the camera.
     _from.set(target.x, target.y + profile.lookHeight, target.z);
     // Under a low ceiling (the car park under Aotea Square), stay well below
     // it: pulled in along a near-level ray, the camera would sit just under
     // it, closer than the near plane, and see through.
-    const up = this.world.castRay(new RAPIER.Ray(_from, _up), height + 1, true, undefined, undefined, ignore);
-    if (up) _desired.y = Math.min(_desired.y, _from.y + Math.max(up.timeOfImpact - CEILING_GAP, 0));
+    const roof = this.world.castRay(new RAPIER.Ray(_from, _up), Math.max(up, 0) + 1, true, undefined, undefined, ignore);
+    if (roof) _desired.y = Math.min(_desired.y, _from.y + Math.max(roof.timeOfImpact - CEILING_GAP, 0));
     _toCam.copy(_desired).sub(_from);
     const len = _toCam.length();
     _toCam.divideScalar(len);
@@ -136,7 +197,7 @@ export class ChaseCamera {
     if (this.swayAmount > 0.001) {
       const a = this.swayAmount;
       const t = this.swayTime;
-      _toCam.set(Math.cos(this.yawAngle), 0, Math.sin(this.yawAngle));
+      _toCam.set(Math.cos(yaw), 0, Math.sin(yaw));
       this.camera.position.x += -_toCam.z * Math.sin(t * 1.3) * a * 0.9;
       this.camera.position.z += _toCam.x * Math.sin(t * 1.3) * a * 0.9;
       this.camera.position.y += Math.sin(t * 2.1) * a * 0.25;
@@ -160,9 +221,16 @@ export class ChaseCamera {
     }
   }
 
-  /** Turn the camera by hand (drag to look). */
-  rotate(radians: number): void {
-    if (this.yawAngle !== null) this.yawAngle += radians;
+  /**
+   * Turn the camera by hand, radians: x right, y down. Holds off following
+   * for LOOK.recentreDelay, then it eases back behind.
+   */
+  look(x: number, y: number): void {
+    if (x === 0 && y === 0) return;
+    if (this.yawAngle !== null) this.yawAngle += x;
+    this.pitch += y; // bounded in update()
+    this.sinceLook = 0;
+    this.follow = 0;
   }
 
   /** Jolt the camera, e.g. on a crash. Strength ~0..1. */
@@ -184,6 +252,10 @@ export class ChaseCamera {
    */
   snap(heading?: number): void {
     this.yawAngle = heading === undefined ? null : Math.atan2(-Math.sin(heading), Math.cos(heading));
+    this.viewYaw = this.yawAngle ?? 0;
     this.smoothedPos.set(0, 0, 0);
+    this.pitch = 0;
+    this.sinceLook = Infinity;
+    this.follow = 1;
   }
 }

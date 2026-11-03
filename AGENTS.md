@@ -35,8 +35,10 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
 - `src/car.ts` (`TUNING`; parked cars sleep until knocked), `src/corolla.ts` (model, baked to shared geometry),
   `src/car-fleet.ts` (every car drawn in five instanced calls: bodies with per-car paint, lamps, wheels, a
   ~50-triangle stand-in past 80 m, blob shadows; culled per car on the CPU), `src/player.ts` (also the body plan
-  pedestrians share), `src/camera.ts`,
-  `src/input.ts` (touch/keyboard/gamepad), `src/cheats.ts` (stick-flick codes: ↑↑↓↓←→←→ flies),
+  pedestrians share), `src/camera.ts` (chase camera: look round and up by hand, eases back behind after
+  `LOOK.recentreDelay`, on the move only in a car or boat; C looks behind; wheel zooms),
+  `src/input.ts` (touch/keyboard/gamepad; `LOOK`; a click locks the mouse for looking, released while paused;
+  M/Tab map, N mute; `?debug` `__game.look(x, y)`, `state().cam`; smoke: `camera.mjs`), `src/cheats.ts` (stick-flick codes: ↑↑↓↓←→←→ flies),
   `src/audio.ts` (synthesised), `src/skids.ts`
 - `src/map/` (#14): `chart.ts` (map.png with the road graph stroked over it once, into one 2D canvas; draws
   views of it, the route and blips), `minimap.ts` (round, top left, turns with the camera, zooms out with speed;

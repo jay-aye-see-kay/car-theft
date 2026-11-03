@@ -22,9 +22,11 @@ performance overlay, `?map=test` for the old test town).
 | Brake / reverse | S / ↓ | ◀ | LT |
 | Handbrake | Space | HB | A |
 | Flip car | R | ⟲ | Back |
-| Look around | drag the view | drag the view | right stick |
-| Mute | M | 🔊 | |
-| Map | Tab | tap the minimap | |
+| Look around | mouse (click the view to capture it; Esc lets go) | drag the view | right stick |
+| Look behind (car, boat) | C / middle button | | R3 |
+| Zoom camera | mouse wheel | | |
+| Mute | N | 🔊 | |
+| Map | M / Tab | tap the minimap | |
 
 Getting out at speed brakes to a stop first, like GTA III. You step out of
 the driver's door, which is on the right (they're NZ cars).
@@ -38,7 +40,7 @@ alongside a wharf to step ashore, or anywhere else to go over the side and be
 fished out.
 
 **Map:** the minimap in the top left turns with you, and shows mission
-blips (gold), your goal (pink) and the route there. Tap it (or press Tab)
+blips (gold), your goal (pink) and the route there. Tap it (or press M or Tab)
 for the full map: drag and pinch or scroll to look around, tap to set a
 waypoint (the route on both maps takes you there), tap a mission to head for
 it, tap the waypoint again to clear it.

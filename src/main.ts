@@ -44,6 +44,8 @@ import { Smash, SMASH, toughness, type SmashEvent } from './smash.ts';
 import './style.css';
 
 const FIXED_DT = 1 / 60;
+/** Below this, m/s, a car or boat counts as parked: a camera you've turned stays turned. */
+const LOOK_PARKED = 2;
 const MAX_STEPS = 5;
 /** ?debug step(): ticks run between waits for streaming (1 s of game time). */
 const STEP_BATCH = 60;
@@ -326,6 +328,9 @@ async function main() {
     paused = tweaksPanel.isOpen || !!fullMap?.open;
     audio.setPaused(paused);
     input.clearPresses();
+    // Paused, the cursor's back for clicking; closing hands the mouse straight back.
+    input.allowLock(started && !paused);
+    if (started && !paused) input.lock();
   };
   tweaksPanel.onToggle = pause;
   if (fullMap) fullMap.onToggle = pause;
@@ -772,6 +777,8 @@ async function main() {
     audio.unlock();
     splash.classList.add('hidden');
     hud.classList.remove('hidden');
+    input.allowLock(true);
+    if (!coarse) input.lock(); // the click or key that started counts as the gesture
     if (fullMap) fullMap.enabled = true;
     if (coarse) {
       try {
@@ -1205,19 +1212,23 @@ async function main() {
     splashes.update(frameDt);
     spray.update(frameDt);
 
+    // Look round by hand; once left alone it comes back behind (see ChaseCamera).
+    const look = input.consumeLook(frameDt);
+    chase.look(look.x, look.y);
+    chase.zoom = input.zoom;
+    // In a car or boat it comes back only on the move: parked, it stays where you left it.
+    const underway = (speed: number) => Math.abs(speed) > LOOK_PARKED || !chase.looking;
     if (boating) {
-      input.consumeLook(frameDt);
       const speed = boating.forwardSpeed();
-      chase.update(frameDt, BOATING_CAM, boating.object.position, yawOf(boating.object.quaternion), speed, boating.collider);
+      chase.update(frameDt, BOATING_CAM, boating.object.position, yawOf(boating.object.quaternion), speed, boating.collider, underway(speed), input.lookBehind);
       speedo.textContent = `${Math.round(Math.abs(speed) * 3.6)}`;
       // An outboard revs higher than the sedan for the same speed.
       audio.setEngine(true, speed * 1.6, boating.throttle);
       audio.setSkid(0, 0);
     } else if (driving) {
-      input.consumeLook(frameDt); // camera stays behind the car
       const speed = driving.forwardSpeed();
       const heading = _euler.setFromQuaternion(driving.object.quaternion, 'YXZ').y;
-      chase.update(frameDt, DRIVING, driving.object.position, heading, speed, driving.collider);
+      chase.update(frameDt, DRIVING, driving.object.position, heading, speed, driving.collider, underway(speed), input.lookBehind);
       speedo.textContent = `${Math.round(Math.abs(speed) * 3.6)}`;
       audio.setEngine(true, speed, driving.throttle);
       audio.setSkid(driving.skid, speed);
@@ -1227,7 +1238,6 @@ async function main() {
       // Swing in behind only while heading away from the camera, so walking
       // sideways or towards the camera doesn't send it spinning.
       const awayFromCamera = input.moveY > 0.3 && input.moveY > Math.abs(input.moveX) * 0.5;
-      chase.rotate(input.consumeLook(frameDt) * 0.006);
       chase.update(frameDt, player.flying ? FLYING : ON_FOOT, player.position, player.heading, player.speed, player.collider, player.speed > 0.5 && awayFromCamera);
       audio.setEngine(false, 0, 0);
       audio.setSkid(0, 0);
@@ -1496,6 +1506,22 @@ async function main() {
         nearBoat: !driving && !boating && !!nearestBoat(),
         /** The ? panel or the full map is open (the game is paused). */
         paused,
+        /**
+         * The chase camera: where it is, which way it faces (atan2(z, x)), the
+         * hand-look pitch, how far follow is back on (0..1), and the heading
+         * of the car or boat you're in as the same kind of angle (to compare).
+         */
+        cam: {
+          pos: camera.position.toArray(),
+          ...chase.debug(),
+          zoom: chase.zoom,
+          target: (() => {
+            const q = driving?.object.quaternion ?? boating?.object.quaternion;
+            if (!q) return null;
+            const h = _euler.setFromQuaternion(q, 'YXZ').y;
+            return Math.atan2(-Math.sin(h), Math.cos(h));
+          })(),
+        },
         dizzy: dizzy.active,
         peds: peds?.list.length ?? 0,
         /** The cops: heat level 0-3, seen right now, being given a talking-to. */
@@ -1541,6 +1567,8 @@ async function main() {
         ...map.debugInfo(),
       }),
       groundHeight: (x: number, z: number) => map.heightAt(x, z),
+      /** Look round as the mouse would, radians: x right, y down (taken on the next tick). */
+      look: (x: number, y = 0) => input.injectLook(x, y),
       /** Boats (src/boat.ts): kind, position, heading, speed, how much of the hull's wet, and whether it's the one you're in. */
       boats: () => boats.map((b, i) => ({
         index: i,
@@ -1898,6 +1926,7 @@ async function main() {
         eased.x = eased.z = eased.steer = 0;
         tickClock = 0;
         input.clearPresses();
+        input.zoom = 1;
         chase.snap(map.spawn.heading);
         await step(2); // and stays paused: what follows is stepped from here
       },

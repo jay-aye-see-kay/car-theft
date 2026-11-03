@@ -2,7 +2,7 @@ import type { Blip, Chart, ChartView } from './chart.ts';
 import type { Navigator } from './navigator.ts';
 import { BLIP } from './style.ts';
 
-// The full-screen map (tap the minimap, or Tab): north up, drag to pan,
+// The full-screen map (tap the minimap, or M or Tab): north up, drag to pan,
 // pinch or scroll to zoom. Tap the map to put a waypoint there (and the
 // route to it on both maps), tap a mission to head for it, tap the waypoint
 // again or Clear to drop it. The game pauses while it's open.
@@ -98,7 +98,7 @@ export class FullMap {
     }, { passive: false });
     addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement) return;
-      if (e.code === 'Tab' && this.enabled) {
+      if ((e.code === 'Tab' || e.code === 'KeyM') && this.enabled && !e.repeat) {
         e.preventDefault();
         this.toggle();
       } else if (e.code === 'Escape' && this.open) this.toggle(false);
