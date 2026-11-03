@@ -20,7 +20,10 @@ interface CityParking {
 // public/city/<area>/ and streamed in by chunk: LiDAR terrain tinted by
 // land use, OSM buildings, OSM roads draped on the terrain, and the harbour.
 
-const AREA = 'cbd';
+// BRANCH ONLY (world-gen-v2, #58): ?city=v2 loads v1's generator built on v2's
+// ground (public/city/v2/) to drive and compare. Not for main; drop this and
+// public/city/v2/ before merging.
+const AREA = new URLSearchParams(location.search).get('city') === 'v2' ? 'v2' : 'cbd';
 /**
  * A clear afternoon: pale sea haze at the horizon under a deep blue sky,
  * far enough to see across the CBD from the ridge.
