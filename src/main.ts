@@ -40,6 +40,7 @@ import { bearing, Chart, type Blip } from './map/chart.ts';
 import { FullMap } from './map/full-map.ts';
 import { Minimap } from './map/minimap.ts';
 import { Navigator } from './map/navigator.ts';
+import { Smash, SMASH, toughness, type SmashEvent } from './smash.ts';
 import './style.css';
 
 const FIXED_DT = 1 / 60;
@@ -186,6 +187,8 @@ async function main() {
     return kerb ? { ...spot, pos: new THREE.Vector3(kerb.x, spot.pos.y + 0.05, kerb.z), kerb: true } : { ...spot, kerb: false };
   });
   const fixedCars = spots.length;
+  // Nothing knock-down-able (src/smash.ts) where the map's own cars park: a lamp or bin under one would perch it up on it.
+  map.props?.keepClear(spots.map((s) => ({ x: s.pos.x, z: s.pos.z, heading: s.heading, halfL: CHASSIS_HALF.x + 0.3, halfW: CHASSIS_HALF.z + 0.3 })));
   if (map.roads) {
     for (let i = 0; i < TRAFFIC_POOL + PARKED_POOL + PATROL_POOL; i++) spots.push({ pos: new THREE.Vector3(i * 6, -300, 0), heading: 0, pitch: 0, roll: 0, paint: 0xffffff, kerb: false });
   }
@@ -258,6 +261,11 @@ async function main() {
   const copsMesh = new CopsMesh();
   scene.add(copsMesh.group);
   const carLikes: CarLike[] = cars.map(({ car }) => ({ body: car.body, half: CHASSIS_HALF, player: false }));
+  // Street furniture and trees cars knock down (src/smash.ts), and the copies of them falling over.
+  const smash = map.props ? new Smash(map.props, (x, z) => map.heightAt(x, z)) : null;
+  if (smash) scene.add(smash.mesh);
+  /** What got knocked down since the last frame (for the noise). */
+  const smashed: SmashEvent[] = [];
   /** When each car last hit the player on foot, game s. */
   const hitPlayerAt = cars.map(() => -Infinity);
   /** On-foot stick and the steering, eased (dizzy makes them mushy). */
@@ -1021,6 +1029,11 @@ async function main() {
       const walker = !driving && !boating && !player.flying ? player.position : null;
       town.step(frameDt, focus, chase.yaw, { cars: carList, absent: (car) => frozenCar(car), walker }, (car) => car === driving || remotes.drives(car));
     }
+    // Knocked-down things stand back up once you're far off and looking away.
+    if (smash) {
+      const focus = debugView ? _p.fromArray(debugView.from) : focusObject().position;
+      smash.update(focus, chase.yaw);
+    }
     // The cops: who sees you, heat, who's after you and what they do (before the physics, like the traffic).
     if (cops && started) {
       cops.step(frameDt, suspect(), chase.yaw, { cars: carList, absent: (car) => frozenCar(car), walker: !driving && !boating && !player.flying ? player.position : null });
@@ -1067,6 +1080,8 @@ async function main() {
     const tPhys = performance.now();
     let steps = 0;
     const drivingIndex = cars.findIndex((c) => c.car === driving);
+    /** Cars in the world this frame, for knocking things down. */
+    const smashers = smash ? cars.filter((c) => !c.frozen && !town?.idle(c.car)).map((c) => c.car) : [];
     while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
       // Game time at the end of this step.
       remotes.beforeStep(clock - accumulator + FIXED_DT, drivingIndex, room.myId, !driving);
@@ -1091,7 +1106,10 @@ async function main() {
         if (c.x !== t.x || c.z !== t.z) b.body.addForce({ x: (c.x - t.x) * b.spec.mass * 1.5, y: 0, z: (c.z - t.z) * b.spec.mass * 1.5 }, true);
       }
       if (!driving && !boating && !playerFrozen) player.update({ moveX, moveZ, sprint, jump: jump && steps === 0, rise: input.rise, floor }, FIXED_DT);
+      // Last before the step: anything a car's about to hit hard enough gives way (its collider goes).
+      if (smash) smashed.push(...smash.beforeStep(smashers, FIXED_DT));
       world.step();
+      smash?.step(FIXED_DT);
       for (const { car, frozen } of cars) if (!frozen) car.afterStep(FIXED_DT);
       for (const b of boats) if (!b.frozen) b.afterStep(FIXED_DT);
       if (!driving && !boating) player.afterStep();
@@ -1150,6 +1168,16 @@ async function main() {
       car.impact = 0;
     }
     skids.flush();
+    // Knocking things down: heard (and felt) when it's you, heard nearby when it's someone else.
+    for (const e of smashed) {
+      const at = e.car.body.translation();
+      const d = e.car === driving ? 0 : Math.hypot(at.x - camera.position.x, at.z - camera.position.z);
+      if (d > 60) continue;
+      audio.smash(e.sound, e.strength * (1 - d / 60));
+      if (e.car === driving) chase.shake(e.strength * 0.35);
+    }
+    smashed.length = 0;
+    smash?.sync();
     for (const b of boats) {
       if (b.frozen) continue;
       b.render(alpha);
@@ -1662,6 +1690,21 @@ async function main() {
       },
       /** Where the map's parked cars are put: parking.json's spots, some moved half up on the kerb (`kerb`). */
       parking: () => spots.slice(0, fixedCars).map((p) => ({ pos: p.pos.toArray(), heading: p.heading, kerb: !!p.kerb })),
+      /** Knocked down (src/smash.ts): how many now, by kind since the reset, and each one's state. */
+      smashed: () => ({ down: smash?.down ?? 0, tally: { ...smash?.tally }, pieces: smash?.list() ?? [], drawn: !!smash?.mesh.visible, on: SMASH.on }),
+      /**
+       * Props standing within `r` of (x, z) (in chunks with colliders), nearest first: kind, foot, height,
+       * footprint half-sizes and heading, whether it has a collider, and the speed (km/h) it gives way above.
+       */
+      props: (x: number, z: number, r = 30, kind?: string) => {
+        const out: { kind: string; x: number; y: number; z: number; height: number; halfW: number; halfD: number; heading: number; collider: boolean; kmh: number; d: number }[] = [];
+        map.props?.near(x, z, r, (p) => {
+          const d = Math.hypot(p.x - x, p.z - z);
+          if (d > r || (kind && p.kind !== kind)) return;
+          out.push({ kind: p.kind, x: p.x, y: p.y, z: p.z, height: p.height, halfW: p.halfW, halfD: p.halfD, heading: p.heading, collider: !!p.collider, kmh: Math.round(toughness(p).kmh), d });
+        });
+        return out.sort((a, b) => a.d - b.d);
+      },
       /** Parked cars' poses: position and up vector's y (1 = level). */
       carPoses: () => cars.map(({ car, frozen }) => ({
         pos: car.object.position.toArray(),
@@ -1788,7 +1831,8 @@ async function main() {
       /** Set car `index` moving at `speed` m/s the way it faces (to test a crash at a given speed). */
       launchCar: (index: number, speed: number) => {
         const car = cars[index].car;
-        const h = _euler.setFromQuaternion(car.object.quaternion, 'YXZ').y;
+        // The body's heading, not the drawn one: that's stale after a teleport until a frame is drawn.
+        const h = _euler.setFromQuaternion(car.rotation(), 'YXZ').y;
         car.body.setLinvel({ x: Math.cos(h) * speed, y: 0, z: -Math.sin(h) * speed }, true);
       },
       /** The largest crash impact (m/s of sudden speed change) the driven car has had since the last call. */
@@ -1847,6 +1891,8 @@ async function main() {
         copsHud.hideTicket();
         peds?.reset(1);
         town?.reset();
+        smash?.reset();
+        smashed.length = 0;
         carSpeeds.reset();
         hitPlayerAt.fill(-Infinity);
         eased.x = eased.z = eased.steer = 0;

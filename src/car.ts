@@ -296,6 +296,18 @@ export class Car {
     v.updateVehicle(dt);
   }
 
+  /**
+   * Knocked something down (src/smash.ts): changes the velocity by (dvx, dvz)
+   * before the step, without it counting as an impact (no crash, no dizziness:
+   * the smash makes its own noise).
+   */
+  knocked(dvx: number, dvz: number): void {
+    const lv = this.body.linvel();
+    this.body.setLinvel({ x: lv.x + dvx, y: lv.y, z: lv.z + dvz }, true);
+    this.prevVel.x += dvx;
+    this.prevVel.z += dvz;
+  }
+
   /** Call after world.step(). */
   afterStep(dt: number): void {
     const lv = this.body.linvel();

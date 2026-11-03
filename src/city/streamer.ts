@@ -1,6 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
-import { BuildingChunk } from './building-chunk.ts';
+import { BuildingChunk, propOverlaps, type Prop } from './building-chunk.ts';
 import type { Cavity } from './cavity.ts';
 import { cityMaterial } from './city-material.ts';
 import { ChunkMesh } from './chunk-mesh.ts';
@@ -83,7 +83,8 @@ export class ChunkStreamer {
   private readonly world: RAPIER.World;
   private readonly body: RAPIER.RigidBody;
   private readonly layout: TerrainLayout;
-  private readonly material: THREE.Material;
+  /** The city's shared material (props falling over are drawn with it too). */
+  readonly material: THREE.Material;
   private readonly slots = new Map<string, Slot>();
   private inFlight = 0;
   private readonly focus = { x: 0, z: 0 };
@@ -204,6 +205,50 @@ export class ChunkStreamer {
     return !!this.slotAt(x, z)?.chunk?.hasCollider;
   }
 
+  /**
+   * Calls `f` for each standing prop (src/smash.ts) that may be within `r` of
+   * (x, z), in chunks that have colliders (whole cells: check the distance yourself).
+   */
+  propsNear(x: number, z: number, r: number, f: (p: Prop) => void): void {
+    const { grid, chunkSize } = this.manifest;
+    const i0 = Math.floor((x - r - grid.x0) / chunkSize);
+    const i1 = Math.floor((x + r - grid.x0) / chunkSize);
+    const j0 = Math.floor((z - r - grid.z0) / chunkSize);
+    const j1 = Math.floor((z + r - grid.z0) / chunkSize);
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const b = this.slots.get(`${i},${j}`)?.buildings;
+        if (b?.hasCollider) b.propsNear(x, z, r, f);
+      }
+    }
+  }
+
+  /** Footprints nothing may stand in (see keepPropsClear). */
+  private readonly clear: { x: number; z: number; heading: number; halfL: number; halfW: number }[] = [];
+
+  /**
+   * Leaves out any prop standing in these footprints (the map's parked cars,
+   * put at the kerb where a lamp or bin may be): hidden, no collider, for
+   * good, in chunks loaded now and later.
+   */
+  keepPropsClear(boxes: { x: number; z: number; heading: number; halfL: number; halfW: number }[]): void {
+    this.clear.push(...boxes);
+    for (const slot of this.slots.values()) if (slot.buildings) this.clearProps(slot.buildings);
+  }
+
+  private clearProps(b: BuildingChunk): void {
+    for (const box of this.clear) {
+      b.propsNear(box.x, box.z, box.halfL + 3, (p) => {
+        if (propOverlaps(p, box.x, box.z, box.heading, box.halfL, box.halfW)) b.hideProp(p);
+      });
+    }
+  }
+
+  /** Whether a prop's chunk is still loaded (it's thrown away, props and all, when the chunk unloads). */
+  holds(p: Prop): boolean {
+    return !p.chunk.unloaded;
+  }
+
   update(x: number, z: number): void {
     this.focus.x = x;
     this.focus.z = z;
@@ -292,6 +337,7 @@ export class ChunkStreamer {
       this.scene.remove(slot.mesh.mesh);
       slot.mesh.dispose();
     }
+    if (slot.buildings) slot.buildings.unloaded = true;
     slot.chunk = slot.buildings = slot.roads = slot.mesh = slot.tiles = slot.ground = undefined;
   }
 
@@ -339,6 +385,7 @@ export class ChunkStreamer {
         slot.chunk = chunk;
         slot.buildings = buildings ? new BuildingChunk(buildings, o.x + half, o.z + half) : undefined;
         slot.roads = roads ? new BuildingChunk(roads, o.x + half, o.z + half) : undefined;
+        if (slot.buildings) this.clearProps(slot.buildings);
         const d = this.distance(slot.info, this.focus.x, this.focus.z);
         const mesh = new ChunkMesh(`chunk ${slot.info.i},${slot.info.j}`, o.x + half, o.z + half, half, this.material, slot.roads, slot.buildings);
         mesh.setTerrain(chunk.parts(d < DETAIL_IN));

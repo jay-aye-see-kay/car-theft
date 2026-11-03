@@ -20,7 +20,7 @@
 // Each building's dress (facade layer, colours, cornices and parapets)
 // comes from its architectural era (eras.ts).
 import earcut from 'earcut';
-import type { BuildingMesh } from '../../src/city/format.ts';
+import type { BuildingMesh, PropKind } from '../../src/city/format.ts';
 import type { OsmData, OsmWay, Tags } from './osm.ts';
 import { lonLatToLocal, type Local } from './project.ts';
 import { sampleLocal, type Raster } from './raster.ts';
@@ -807,6 +807,8 @@ export class MeshBuilder {
   readonly tile: number[] = [];
   readonly uv: number[] = [];
   readonly shade: number[] = [];
+  /** Things a car can knock down (see src/smash.ts), each a contiguous run of vertices. */
+  readonly props: { kind: PropKind; x: number; y: number; z: number; heading: number; height: number; radius: number; first: number; count: number }[] = [];
 
   get vertexCount() {
     return this.pos.length / 3;
@@ -834,6 +836,17 @@ export class MeshBuilder {
     } finally {
       this.idx = core;
     }
+  }
+
+  /**
+   * Runs `emit` (which must add only this model's vertices) and records them
+   * as a prop the game can knock down: its foot at (x, y, z) in world metres.
+   */
+  prop(kind: PropKind, x: number, y: number, z: number, heading: number, height: number, radius: number, emit: () => void) {
+    const first = this.vertexCount;
+    emit();
+    const count = this.vertexCount - first;
+    if (count) this.props.push({ kind, x, y, z, heading, height, radius, first, count });
   }
 
   vertex(x: number, y: number, z: number, n: readonly number[], c: readonly number[], layer = 0, tile = 0, u = 0, v = 0, shade = 1): number {
@@ -1510,7 +1523,18 @@ export class MeshBuilder {
       groups = { side, from };
     }
     const indices = Uint32Array.from(list);
-    return { xCm, zCm, yCm, baseCm: base, normals, colours, indices, colliderIndices: Uint32Array.from(this.colliderIdx), layers, detail, ...nearOnly, ...fine, groups };
+    const props = this.props.map((p) => ({
+      kind: p.kind,
+      heading: p.heading,
+      first: p.first,
+      count: p.count,
+      xCm: Math.round((p.x - cx) * 100),
+      zCm: Math.round((p.z - cz) * 100),
+      yCm: Math.round(p.y * 100) - base,
+      heightCm: Math.round(p.height * 100),
+      radiusCm: Math.round(p.radius * 100),
+    }));
+    return { xCm, zCm, yCm, baseCm: base, normals, colours, indices, colliderIndices: Uint32Array.from(this.colliderIdx), layers, detail, ...nearOnly, ...fine, groups, props };
   }
 }
 

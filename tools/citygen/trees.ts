@@ -306,10 +306,12 @@ export const treeTris = { crowns: 0, trunks: 0 };
 
 /**
  * A tapered trunk: an open three-sided prism from just under the ground to
- * `top`. Its faces are also the tree's collider, so a car stops against it
- * and the character controller walks round it.
+ * `top`. Not in the chunk's collider: the game gives each tree a collider of
+ * its own (src/smash.ts), so a car stops against it below its break speed
+ * and knocks it down above it. `r` is recorded as the tree's trunk radius.
  */
 function trunk(mb: MeshBuilder, x: number, y: number, z: number, top: number, r: number, colour: readonly number[], rot: number) {
+  trunkRadius = r;
   const sides = 3;
   const base = y - 0.3;
   const ring: number[][] = [];
@@ -328,9 +330,11 @@ function trunk(mb: MeshBuilder, x: number, y: number, z: number, top: number, r:
     faces.push(a0, a1, b0, b0, a1, b1);
   }
   mb.idx.push(...faces);
-  mb.colliderIdx.push(...faces);
   treeTris.trunks += sides * 2;
 }
+
+/** The last trunk's radius, for the prop record (emitTree's models each draw one trunk). */
+let trunkRadius = 0;
 
 /**
  * A palm frond from (x, y, z) heading `a`: a narrow blade rising, then
@@ -405,8 +409,14 @@ function blob(mb: MeshBuilder, x: number, z: number, bottom: number, top: number
   treeTris.crowns += (mb.idx.length - before) / 3;
 }
 
-/** Bakes one tree into its chunk's mesh, standing on the ground at y. */
+/** Bakes one tree into its chunk's mesh, standing on the ground at y, as a prop a car can knock down. */
 export function emitTree(mb: MeshBuilder, t: Tree, y: number) {
+  const before = mb.props.length;
+  mb.prop(t.kind, t.x, y, t.z, 0, t.height, 0, () => treeModel(mb, t, y));
+  if (mb.props.length > before) mb.props[mb.props.length - 1].radius = trunkRadius;
+}
+
+function treeModel(mb: MeshBuilder, t: Tree, y: number) {
   const key = `${t.x.toFixed(1)},${t.z.toFixed(1)}`;
   const h0 = hash(key, 1);
   const h1 = hash(key, 2);
