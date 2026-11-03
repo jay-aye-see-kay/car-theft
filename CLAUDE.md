@@ -144,7 +144,11 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   `heightAt(x, z, y)` to get the floor rather than the ground on top.
 - `src/landmarks/`: hand-made models placed from manifest `landmark` records (`overrides/cbd.json`),
   one mesh each with its own atlas (`atlas.ts`): Sky Tower, Ferry Building, Chief Post Office, Civic,
-  Town Hall, Sky World ("High World": MINIMAX, the Hard Luck Café), Aotea Square (Waharoa, car park)
+  Town Hall, Sky World ("High World": MINIMAX, the Hard Luck Café), Aotea Square (Waharoa, car park),
+  St Kevin's Arcade and the Myers Park steps (`st-kevins.ts`: walk or drive from K Road through the shops and down
+  its stairs to Poynton Tce; 79 steps fitted to the bank, Moses at the foot; smoke: `st-kevins.mjs`). A model with
+  an inside sets `close`: in full (`Builder.close`) only that near, a plain inside to `near`; `placedBy`/`at` hang a
+  second model (the steps) on another's record, measured from its own middle. Colliders may be convex hulls (ramps).
 - `src/city/road-graph.ts`: the drivable network (`roadgraph.json`) for routing, traffic and police:
   `nearest`, `route` (A*, one-ways respected), `lane` (a pose in a lane, driving on the left),
   `randomLane` (only where a car can always drive on: the main strongly connected part).

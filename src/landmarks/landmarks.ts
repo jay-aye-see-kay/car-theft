@@ -14,8 +14,11 @@ import { Builder, type ColliderSpec } from './builder.ts';
 // shader with its own small atlas (atlas.ts): full detail within `near`
 // metres of the player, a plain far version beyond, nothing past
 // `drawDistance` (the Sky Tower is always drawn, with the far skyline's
-// long haze). Colliders are a few boxes and cylinders each, always present
-// (they're cheap), on the city's fixed body.
+// long haze). One with an inside (St Kevin's Arcade) can keep that for
+// when you're `close`: it's built a third time with Builder.close set, and
+// the near model is the outside with a plain inside. Colliders are a few
+// boxes, cylinders and hulls each, always present (they're cheap), on the
+// city's fixed body.
 
 export interface LandmarkModel {
   /** Manifest landmark id ('sky-tower'). */
@@ -23,6 +26,12 @@ export interface LandmarkModel {
   name: string;
   /** Full detail inside this distance (m, from the player, horizontal). */
   near: number;
+  /** If set, the near model is built twice: in full (Builder.close) only inside this distance. */
+  close?: number;
+  /** Placed by the manifest records of this id instead of its own (a second model riding on another's). */
+  placedBy?: string;
+  /** Where distances are measured from, if not its records' centroid (local metres). */
+  at?: [number, number];
   /** Not drawn beyond this (m). */
   drawDistance: number;
   /** Use the far skyline's haze instead of the scene's fog. */
@@ -44,8 +53,8 @@ export interface LandmarkState {
   height: number;
   /** Top of the drawn model, m above sea level. */
   top: number;
-  lod: 'near' | 'far' | 'hidden';
-  triangles: { near: number; far: number };
+  lod: 'close' | 'near' | 'far' | 'hidden';
+  triangles: { close: number; near: number; far: number };
   colliders: number;
   /** Whether the OSM shape it replaces is hidden in the city mesh. */
   replaces: boolean;
@@ -55,6 +64,7 @@ interface Entry {
   model: LandmarkModel;
   records: LandmarkInfo[];
   mesh: THREE.Mesh;
+  close: THREE.BufferGeometry | null;
   near: THREE.BufferGeometry;
   far: THREE.BufferGeometry;
   x: number;
@@ -83,12 +93,21 @@ export class Landmarks {
     const fogged = cityMaterial(atlas, { landmark });
     const hazed = cityMaterial(atlas, { landmark, haze });
     for (const model of models) {
-      const records = (manifest.landmarks ?? []).filter((l) => l.id === model.id);
+      const records = (manifest.landmarks ?? []).filter((l) => l.id === (model.placedBy ?? model.id));
       if (!records.length) continue;
       const nb = new Builder();
+      nb.close = !model.close;
       model.build(nb, false, records);
       const fb = new Builder();
       model.build(fb, true, records);
+      // The full model, if there's a plainer near one; its colliders are the ones used.
+      let cb: Builder | null = null;
+      if (model.close) {
+        cb = new Builder();
+        cb.close = true;
+        model.build(cb, false, records);
+      }
+      const close = cb?.geometry() ?? null;
       const near = nb.geometry();
       const far = fb.geometry();
       const mesh = new THREE.Mesh(far, model.haze ? hazed : fogged);
@@ -98,10 +117,13 @@ export class Landmarks {
       mesh.visible = false;
       mesh.userData.parts = {};
       scene.add(mesh);
-      const colliders = nb.colliders.map((c) => world.createCollider(colliderDesc(c), body));
-      const x = records.reduce((s, r) => s + r.x, 0) / records.length;
-      const z = records.reduce((s, r) => s + r.z, 0) / records.length;
-      this.entries.push({ model, records, mesh, near, far, x, z, lod: 'hidden', colliders });
+      const colliders = (cb ?? nb).colliders.flatMap((c) => {
+        const desc = colliderDesc(c);
+        return desc ? [world.createCollider(desc, body)] : [];
+      });
+      const x = model.at?.[0] ?? records.reduce((s, r) => s + r.x, 0) / records.length;
+      const z = model.at?.[1] ?? records.reduce((s, r) => s + r.z, 0) / records.length;
+      this.entries.push({ model, records, mesh, close, near, far, x, z, lod: 'hidden', colliders });
       if (model.cavity) this.cavities.push(model.cavity(records));
     }
   }
@@ -112,19 +134,20 @@ export class Landmarks {
     for (const e of this.entries) {
       const d = Math.hypot(e.x - x, e.z - z);
       // A little hysteresis so standing on the line doesn't flicker.
-      const slack = e.lod === 'near' ? 30 : 0;
-      const lod: Entry['lod'] = d < e.model.near + slack ? 'near' : d < e.model.drawDistance ? 'far' : 'hidden';
+      const slack = e.lod === 'near' || e.lod === 'close' ? 30 : 0;
+      let lod: Entry['lod'] = d < e.model.near + slack ? 'near' : d < e.model.drawDistance ? 'far' : 'hidden';
+      if (lod === 'near' && e.close && d < e.model.close! + (e.lod === 'close' ? 10 : 0)) lod = 'close';
       if (lod === e.lod) continue;
       e.lod = lod;
       e.mesh.visible = lod !== 'hidden';
-      if (lod !== 'hidden') e.mesh.geometry = lod === 'near' ? e.near : e.far;
+      if (lod !== 'hidden') e.mesh.geometry = lod === 'close' ? e.close! : lod === 'near' ? e.near : e.far;
     }
   }
 
   list(): LandmarkState[] {
     return this.entries.map((e) => {
       const base = Math.min(...e.records.map((r) => r.base));
-      const top = e.near.boundingBox!.max.y;
+      const top = (e.close ?? e.near).boundingBox!.max.y;
       return {
         id: e.model.id,
         name: e.model.name,
@@ -134,7 +157,7 @@ export class Landmarks {
         height: e.model.height,
         top,
         lod: e.lod,
-        triangles: { near: (e.near.index?.count ?? 0) / 3, far: (e.far.index?.count ?? 0) / 3 },
+        triangles: { close: (e.close?.index?.count ?? 0) / 3, near: (e.near.index?.count ?? 0) / 3, far: (e.far.index?.count ?? 0) / 3 },
         colliders: e.colliders.length,
         replaces: e.records.every((r) => r.hidden),
       };
@@ -142,16 +165,20 @@ export class Landmarks {
   }
 }
 
-function colliderDesc(c: ColliderSpec): RAPIER.ColliderDesc {
+function colliderDesc(c: ColliderSpec): RAPIER.ColliderDesc | null {
   const desc =
-    c.kind === 'box'
+    c.kind === 'hull'
+      ? RAPIER.ColliderDesc.convexHull(Float32Array.from(c.points))
+      : c.kind === 'box'
       ? RAPIER.ColliderDesc.cuboid(c.half[0], c.half[1], c.half[2]).setRotation(
           new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), c.rotY),
         )
       : c.kind === 'cylinder'
         ? RAPIER.ColliderDesc.cylinder(c.halfHeight, c.radius)
         : RAPIER.ColliderDesc.trimesh(Float32Array.from(c.vertices), Uint32Array.from(c.indices));
-  if (c.kind !== 'mesh') desc.setTranslation(c.centre[0], c.centre[1], c.centre[2]);
+  // A degenerate hull (flat, or too few points) has no shape.
+  if (!desc) return null;
+  if (c.kind === 'box' || c.kind === 'cylinder') desc.setTranslation(c.centre[0], c.centre[1], c.centre[2]);
   return desc
     .setCollisionGroups(BUILDING_GROUPS)
     .setFriction(0.5)

@@ -30,7 +30,8 @@ export interface Mat {
 export type ColliderSpec =
   | { kind: 'box'; centre: V3; half: V3; rotY: number }
   | { kind: 'cylinder'; centre: V3; halfHeight: number; radius: number }
-  | { kind: 'mesh'; vertices: number[]; indices: number[] };
+  | { kind: 'mesh'; vertices: number[]; indices: number[] }
+  | { kind: 'hull'; points: number[] };
 
 const _c = new THREE.Color();
 
@@ -49,6 +50,11 @@ export class Builder {
    * walls are a little darker in their first few metres, like the city's.
    */
   ground = -Infinity;
+  /**
+   * Building the full model, not the plainer near one (LandmarkModel.close):
+   * always true for a model without a close distance.
+   */
+  close = true;
 
   get vertexCount(): number {
     return this.pos.length / 3;
@@ -296,6 +302,11 @@ export class Builder {
 
   collideCylinder(cx: number, cz: number, y0: number, y1: number, radius: number): void {
     this.colliders.push({ kind: 'cylinder', centre: [cx, (y0 + y1) / 2, cz], halfHeight: (y1 - y0) / 2, radius });
+  }
+
+  /** A solid convex hull of these points: a flight of stairs as a ramp, a wall with a sloping top. */
+  collideHull(points: V3[]): void {
+    this.colliders.push({ kind: 'hull', points: points.flat() });
   }
 
   /** A flat polygon at height y as a (two-sided) collider: a ceiling the camera can't see past. */
