@@ -23,6 +23,8 @@ npm run citygen:build   # regenerate public/city/cbd/ (fetches OSM + LiDAR into 
 npm run citygen:places  # just the gazetteer (places.json), e.g. after editing names or overrides
 npm run citygen:roadgraph  # just the road graph (roadgraph.json)
 npm run citygen:map     # just the map picture (map.png), from the committed chunks
+npm run snapshot -- fetch | manifest | verify | upload   # the frozen inputs (#46)
+npm run citygen2        # world gen v2 stages, drawn to .cache/citygen2/<area>/debug/ (#58)
 ```
 
 CI (`.github/workflows/cloudflare.yml`) builds and deploys every pushed branch to
@@ -180,6 +182,14 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   Parks: `ground.ts` (land use, park paths, canopy cover: shade near, canopy tint far), `trees.ts` (OSM trees plus
   LiDAR treetops on green ground and tree-shaped ones over footpaths; each a prop, see `src/smash.ts`), `barriers.ts` (park edges: walls, fences,
   hedges, retaining walls, and a default low hedge where a park meets a footpath).
+- `tools/snapshot/` (#46): every generator input frozen at a date. `sources.ts` lists them, `<id>.json` (committed)
+  pins each by sha256, files live in `.snapshot/<id>/` and the public R2 mirror `data.cartheft.net/<id>/` (bucket
+  `cartheft-data`, upload from a laptop with wrangler). `files.ts` `snapshotFile(path)` is the only way generators read
+  inputs: local or fetched, hash-checked. 2026-11-03 is a 10 km subset (6 LiDAR tiles, BBBike Auckland OSM).
+- `tools/citygen2/` (#58, #59): world gen v2, a procedural city on a 1:1 road skeleton. `pbf.ts` (OSM PBF reader, no
+  dependency, into v1's `OsmData`), `inputs.ts` (OSM + stitched 1 m DEM/DSM from the snapshot, cached), `terrain.ts`
+  (road heights solved over the network, ground pulled to them, land/sea from OSM's coastline alone), `debug.ts`
+  (PNG pictures per stage), `v1-bridge.ts` (`CITYGEN_GROUND=v2` runs v1's build.ts on v2 ground into `public/city/v2/`).
 - `scripts/smoke/` (Playwright: `run.mjs`, one file per area; the map in `map.mjs`), `scripts/sim-car.ts`. Experiments:
   `dizzy.mjs`, `peds.mjs`, `traffic.mjs`, `cops.mjs`, `tweaks.mjs` (the panel on the phone page); hooks `__game.dizzy()`, `peds()`, `town()`,
   `spawnPed(x, z)`, `knobs()`, `knob('dizzy.on', false)`, `dropPlayer(m)`, `hitPlayer(car, speed)`.
