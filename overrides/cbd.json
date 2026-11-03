@@ -31,6 +31,7 @@
   "way/1137191821": { "landmark": "wynyard-silos" },
   "way/1137191822": { "landmark": "wynyard-silos" },
   "way/1137191823": { "landmark": "wynyard-silos" },
+  "way/162152417": { "landmark": "st-kevins", "hide": true, "block": false, "note": "St Kevin's Arcade (1924): hand-made model src/landmarks/st-kevins.ts, with the arcade open through it from K Road down the stairs to Poynton Tce, and its own colliders" },
 
   "// places": "the gazetteer (tools/citygen/places.ts): ids missions use, hand-picked parody names, spots along streets",
   "node/4753906352": { "place": { "id": "k-road-dairy", "name": "Open 25 Hours", "kind": "dairy" }, "note": "the milk run's dairy, 135 K Road" },

@@ -31,10 +31,16 @@ export const L = {
   signs: 15, // cut-out: lettered signs, one per 64 px row (see SIGN)
   roundel: 16, // cut-out: the Hard Luck Café's round logo
   townHall: 17, // Town Hall upper floors: Oamaru stone bay, two arched windows over a balcony, 5 x 9 m
+  shopfront: 18, // St Kevin's Arcade: Edwardian shopfront (tinted timber), leadlight transom, tiled stallriser, 4.9 x 3.9 m
+  sashes: 19, // rendered wall (tinted) with a pair of sash windows under leadlight top lights, 4.9 x 3.4 m
+  tiles: 20, // floor tiles: a chequer of four by four, the light ones tinted, 1 m
+  plaster: 21, // smooth painted render (tinted), 4 m
+  signs2: 22, // cut-out: lettered signs, one per 32 px row (see SIGN2)
+  signs3: 23, // cut-out: more of them (see SIGN3)
 } as const;
 
 /** Layers whose alpha is coverage (cityMaterial's `cutout` bits). */
-export const CUTOUT = (1 << L.decal) | (1 << L.lattice) | (1 << L.balustrade) | (1 << L.signs) | (1 << L.roundel);
+export const CUTOUT = (1 << L.decal) | (1 << L.lattice) | (1 << L.balustrade) | (1 << L.signs) | (1 << L.roundel) | (1 << L.signs2) | (1 << L.signs3);
 
 /** Rows of the signs layer, as [u0, v0, u1, v1] (v up): each 4:1. */
 const signRow = (row: number): [number, number, number, number] => [0, 1 - (row + 1) / 4, 1, 1 - row / 4];
@@ -43,6 +49,56 @@ export const SIGN = {
   aotea: signRow(1),
   carPark: signRow(2),
   highWorld: signRow(3),
+} as const;
+
+/**
+ * The narrow sign layers (signs2, signs3): eight rows of 32 px, each 8:1,
+ * for shop fascias and lettering along a parapet. Words and colours are in
+ * SIGN_WORDS; a row's cell is [u0, v0, u1, v1] (v up).
+ */
+const narrowRow = (row: number): [number, number, number, number] => [0, 1 - (row + 1) / 8, 1, 1 - row / 8];
+/** [text, fill, outline, font] per row: serif for the old lettering, sans for shops, script-ish italics for the bars. */
+const SIGN_WORDS: [string, string, string, string][][] = [
+  [
+    ["ST KEVIN'S ARCADE", '#f3ead2', '#22392c', 'Georgia, Times New Roman, serif'],
+    ['MYERS PARK', '#f1cf6a', '#1d2a22', 'Georgia, Times New Roman, serif'],
+    ['RECORDS', '#ffe9c2', '#8f1d1d', 'Arial Black, Arial, sans-serif'],
+    ['VINTAGE', '#fdf5e4', '#1f6f6a', 'Georgia, Times New Roman, serif'],
+    ['BOOKS & ZINES', '#fff8e8', '#24345e', 'Georgia, Times New Roman, serif'],
+    ['TATTOO', '#fbe6e6', '#151515', 'Arial Black, Arial, sans-serif'],
+    ['ESPRESSO', '#fff3dc', '#5a3520', 'Georgia, Times New Roman, serif'],
+    ['BAR', '#ffd6f4', '#e0279b', 'Arial Black, Arial, sans-serif'],
+  ],
+  [
+    ['BARBER', '#ffffff', '#1e4e9c', 'Georgia, Times New Roman, serif'],
+    ['WINE BAR', '#fbe7c6', '#5c1730', 'Georgia, Times New Roman, serif'],
+    ['BURGERS', '#ffe680', '#a8321c', 'Arial Black, Arial, sans-serif'],
+    ['OP SHOP', '#ffffff', '#4a7a2a', 'Arial Black, Arial, sans-serif'],
+    ['COCKTAILS', '#c8fbff', '#0aa6c9', 'Arial Black, Arial, sans-serif'],
+    ['VINYL', '#fff4d6', '#3a2a6e', 'Arial Black, Arial, sans-serif'],
+    ['PLANTS', '#f2ffe6', '#2f6b2a', 'Georgia, Times New Roman, serif'],
+    ['1924', '#f3ead2', '#22392c', 'Georgia, Times New Roman, serif'],
+  ],
+];
+export const SIGN2 = {
+  stKevins: narrowRow(0),
+  myersPark: narrowRow(1),
+  records: narrowRow(2),
+  vintage: narrowRow(3),
+  books: narrowRow(4),
+  tattoo: narrowRow(5),
+  espresso: narrowRow(6),
+  bar: narrowRow(7),
+} as const;
+export const SIGN3 = {
+  barber: narrowRow(0),
+  wineBar: narrowRow(1),
+  burgers: narrowRow(2),
+  opShop: narrowRow(3),
+  cocktails: narrowRow(4),
+  vinyl: narrowRow(5),
+  plants: narrowRow(6),
+  year: narrowRow(7),
 } as const;
 
 /**
@@ -1005,6 +1061,234 @@ const PAINTERS: Painter[] = [
     fill(c, m, 30, 236, R - 60, 8, grey(244), 1);
     shadowBelow(c, 30, 244, R - 60, 8, 0.35);
   },
+  // shopfront: an Edwardian arcade shop, 4.9 x 3.9 m (52 px/m across, 66 up)
+  (c, m, rnd) => {
+    const timber = grey(TINT_GREY);
+    fill(c, m, 0, 0, R, R, timber, 1);
+    grain(c, rnd, 1500, 0.08);
+    // Fascia (the sign goes over it) and the moulded rail under it.
+    band(c, m, 0, 32, grey(TINT_GREY), 1);
+    c.fillStyle = 'rgba(0,0,0,0.18)';
+    c.fillRect(6, 4, R - 12, 1.5);
+    c.fillRect(6, 27, R - 12, 1.5);
+    band(c, m, 32, 7, grey(240), 1);
+    // Leadlight transom: amber glass, a coloured diamond in each light, lead cames.
+    const lights = 7;
+    const lw = (R - 16) / lights;
+    for (let k = 0; k < lights; k++) {
+      const x = 8 + k * lw + 3;
+      const w = lw - 6;
+      fill(c, m, x, 44, w, 36, '#e3b765', 0);
+      const g = c.createLinearGradient(0, 44, 0, 80);
+      g.addColorStop(0, 'rgba(255,240,200,0.35)');
+      g.addColorStop(1, 'rgba(120,70,20,0.25)');
+      c.fillStyle = g;
+      c.fillRect(x, 44, w, 36);
+      const hue = ['#3f8f5a', '#b2344a', '#2f5fa8', '#3f8f5a', '#b2344a', '#2f5fa8', '#3f8f5a'][k];
+      c.fillStyle = hue;
+      c.beginPath();
+      c.moveTo(x + w / 2, 48);
+      c.lineTo(x + w - 5, 62);
+      c.lineTo(x + w / 2, 76);
+      c.lineTo(x + 5, 62);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = 'rgba(40,36,32,0.85)';
+      c.lineWidth = 1.5;
+      c.stroke();
+      c.beginPath();
+      c.moveTo(x, 62);
+      c.lineTo(x + 5, 62);
+      c.moveTo(x + w - 5, 62);
+      c.lineTo(x + w, 62);
+      c.moveTo(x + w / 2, 44);
+      c.lineTo(x + w / 2, 48);
+      c.moveTo(x + w / 2, 76);
+      c.lineTo(x + w / 2, 80);
+      c.stroke();
+    }
+    band(c, m, 82, 6, grey(236), 1);
+    // Display windows either side of a recessed door.
+    const doorX = 150;
+    const doorW = 50;
+    const display = (x: number, w: number) => {
+      // Lit inside: warm back wall, shelves and stock, then the glass over it.
+      fill(c, m, x, 92, w, 134, '#4a3a2c', 0);
+      const glow = c.createLinearGradient(0, 92, 0, 226);
+      glow.addColorStop(0, 'rgba(255,214,150,0.35)');
+      glow.addColorStop(1, 'rgba(255,190,120,0.1)');
+      c.fillStyle = glow;
+      c.fillRect(x, 92, w, 134);
+      for (const y of [140, 186]) {
+        c.fillStyle = 'rgba(30,20,12,0.9)';
+        c.fillRect(x, y, w, 4);
+      }
+      for (const y of [104, 150, 196]) {
+        for (let px = x + 4; px < x + w - 10; ) {
+          const iw = 6 + rnd() * 14;
+          const ih = 12 + rnd() * 20;
+          c.fillStyle = rgb(80 + rnd() * 175, 60 + rnd() * 160, 60 + rnd() * 170);
+          c.fillRect(px, y + 32 - ih, Math.min(iw, x + w - 4 - px), ih);
+          px += iw + 2 + rnd() * 6;
+        }
+      }
+      // Reflections.
+      c.fillStyle = 'rgba(255,255,255,0.12)';
+      c.beginPath();
+      c.moveTo(x + w * 0.2, 92);
+      c.lineTo(x + w * 0.45, 92);
+      c.lineTo(x + w * 0.15, 226);
+      c.lineTo(x, 226);
+      c.lineTo(x, 160);
+      c.closePath();
+      c.fill();
+      // Glazing bars.
+      c.fillStyle = timber;
+      m.fillStyle = '#fff';
+      for (let k = 1; k < Math.round(w / 48); k++) {
+        const bx = x + (w * k) / Math.round(w / 48) - 2;
+        c.fillRect(bx, 92, 4, 134);
+        m.fillRect(bx, 92, 4, 134);
+      }
+    };
+    display(10, doorX - 18);
+    display(doorX + doorW + 8, R - (doorX + doorW + 8) - 8);
+    // The door: a shadowed recess, a glazed door with a kick panel and a brass handle.
+    fill(c, m, doorX - 4, 88, doorW + 8, R - 88, '#2b241d', 0);
+    fill(c, m, doorX + 2, 94, doorW - 4, R - 94, timber, 1);
+    c.fillStyle = 'rgba(0,0,0,0.25)';
+    c.fillRect(doorX + 2, 94, doorW - 4, R - 94);
+    pane(c, m, rnd, doorX + 8, 100, doorW - 16, 100, -0.2);
+    c.fillStyle = 'rgba(255,214,150,0.3)';
+    c.fillRect(doorX + 8, 100, doorW - 16, 100);
+    c.fillStyle = '#c9a24e';
+    c.fillRect(doorX + doorW - 14, 170, 4, 18);
+    // Stallrisers of glazed green tiles.
+    for (const [x, w] of [[10, doorX - 18], [doorX + doorW + 8, R - (doorX + doorW + 8) - 8]] as const) {
+      fill(c, m, x, 228, w, 28, '#2f5a46', 0);
+      c.strokeStyle = 'rgba(0,0,0,0.35)';
+      c.lineWidth = 1;
+      for (let tx = x; tx < x + w; tx += 14) {
+        c.beginPath();
+        c.moveTo(tx, 228);
+        c.lineTo(tx, 256);
+        c.stroke();
+      }
+      c.beginPath();
+      c.moveTo(x, 242);
+      c.lineTo(x + w, 242);
+      c.stroke();
+      c.fillStyle = 'rgba(255,255,255,0.18)';
+      c.fillRect(x, 229, w, 2);
+    }
+    band(c, m, 224, 5, grey(244), 1, 8, R - 16);
+    // Pilasters at the edges.
+    for (const x0 of [0, R - 8]) {
+      fill(c, m, x0, 0, 8, R, grey(232), 1);
+      c.fillStyle = 'rgba(0,0,0,0.2)';
+      c.fillRect(x0 === 0 ? 7 : x0, 0, 1.5, R);
+    }
+  },
+  // sashes: rendered wall with a pair of sash windows, 4.9 x 3.4 m (52 px/m across, 75 up)
+  (c, m, rnd) => {
+    fill(c, m, 0, 0, R, R, grey(TINT_GREY), 1);
+    grain(c, rnd, 4000, 0.08);
+    for (let k = 0; k < 6; k++) {
+      c.fillStyle = `rgba(0,0,0,${0.02 + rnd() * 0.03})`;
+      c.fillRect(rnd() * R, rnd() * R, 30 + rnd() * 60, 20 + rnd() * 40);
+    }
+    // A string course along the top.
+    band(c, m, 0, 12, grey(244), 1);
+    for (const x0 of [34, 146]) {
+      const w = 76;
+      const top = 44;
+      const bottom = 214;
+      // Moulded architrave, then the frame.
+      fill(c, m, x0 - 7, top - 7, w + 14, bottom - top + 7, grey(246), 1);
+      shadowBelow(c, x0 - 7, bottom, w + 14, 6, 0.25);
+      fill(c, m, x0, top, w, bottom - top, '#ece6da', 0);
+      // Top light: leadlight in small panes.
+      pane(c, m, rnd, x0 + 5, top + 5, w - 10, 34, 0.05);
+      c.fillStyle = 'rgba(214,170,90,0.35)';
+      c.fillRect(x0 + 5, top + 5, w - 10, 34);
+      c.strokeStyle = 'rgba(50,44,38,0.7)';
+      c.lineWidth = 1.2;
+      c.beginPath();
+      for (let k = 1; k < 4; k++) {
+        c.moveTo(x0 + 5 + ((w - 10) * k) / 4, top + 5);
+        c.lineTo(x0 + 5 + ((w - 10) * k) / 4, top + 39);
+      }
+      c.moveTo(x0 + 5, top + 22);
+      c.lineTo(x0 + w - 5, top + 22);
+      c.stroke();
+      // Two sashes.
+      pane(c, m, rnd, x0 + 5, top + 45, w - 10, bottom - top - 50, 0);
+      sashes(c, x0 + 5, top + 45, w - 10, bottom - top - 50, 2, 2, '#ece6da', 3);
+      // Sill.
+      fill(c, m, x0 - 10, bottom, w + 20, 8, grey(248), 1);
+      shadowBelow(c, x0 - 10, bottom + 8, w + 20, 8, 0.3);
+    }
+  },
+  // tiles: a chequer of four by four 25 cm tiles, 1 m (the light ones tinted)
+  (c, m, rnd) => {
+    const t = R / 4;
+    for (let j = 0; j < 4; j++) {
+      for (let i = 0; i < 4; i++) {
+        const light = (i + j) % 2 === 0;
+        fill(c, m, i * t, j * t, t, t, light ? grey(TINT_GREY - rnd() * 10) : rgb(30 + rnd() * 8, 30 + rnd() * 8, 32 + rnd() * 8), light ? 1 : 0);
+        // A soft polish: lighter in the middle.
+        const g = c.createRadialGradient(i * t + t / 2, j * t + t / 2, 2, i * t + t / 2, j * t + t / 2, t * 0.7);
+        g.addColorStop(0, 'rgba(255,255,255,0.08)');
+        g.addColorStop(1, 'rgba(0,0,0,0.06)');
+        c.fillStyle = g;
+        c.fillRect(i * t, j * t, t, t);
+      }
+    }
+    grain(c, rnd, 1500, 0.08);
+    c.fillStyle = 'rgba(110,104,96,0.9)';
+    for (let k = 0; k <= 4; k++) {
+      c.fillRect(k * t - 1, 0, 2, R);
+      c.fillRect(0, k * t - 1, R, 2);
+    }
+  },
+  // plaster: smooth painted render, 4 m
+  (c, m, rnd) => {
+    fill(c, m, 0, 0, R, R, grey(TINT_GREY), 1);
+    grain(c, rnd, 5000, 0.07);
+    // Faint patches of touched-up paint.
+    for (let k = 0; k < 8; k++) {
+      c.fillStyle = `rgba(${rnd() < 0.5 ? '0,0,0' : '255,255,255'},${0.008 + rnd() * 0.012})`;
+      c.beginPath();
+      c.ellipse(rnd() * R, rnd() * R, 30 + rnd() * 60, 20 + rnd() * 40, rnd() * 3, 0, Math.PI * 2);
+      c.fill();
+    }
+  },
+  // signs2, signs3: eight narrow lettered rows each, cut out round the letters
+  ...SIGN_WORDS.map((rows): Painter => (c, m) => {
+    c.clearRect(0, 0, R, R);
+    m.fillStyle = '#000';
+    m.fillRect(0, 0, R, R);
+    rows.forEach(([text, fillColour, edge, font], row) => {
+      const y = row * 32 + 17;
+      for (const ctx of [c, m]) {
+        ctx.save();
+        ctx.font = `bold 24px ${font}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineJoin = 'round';
+        const w = ctx.measureText(text).width;
+        const squeeze = Math.min(1, (R - 10) / w);
+        ctx.translate(R / 2, y);
+        ctx.scale(squeeze, 1);
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = ctx === m ? '#fff' : edge;
+        ctx.strokeText(text, 0, 0);
+        ctx.fillStyle = ctx === m ? '#fff' : fillColour;
+        ctx.fillText(text, 0, 0);
+        ctx.restore();
+      }
+    });
+  }),
 ];
 
 export function buildLandmarkAtlas(maxAnisotropy = 1): THREE.DataArrayTexture {

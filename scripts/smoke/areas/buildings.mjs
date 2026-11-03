@@ -2,7 +2,7 @@
 // (overrides/cbd.json), and the hand-made landmark models (src/landmarks).
 
 /** Landmarks with hand-made models (src/landmarks/index.ts). */
-const LANDMARK_MODELS = ['sky-tower', 'ferry-building', 'britomart', 'civic-theatre', 'town-hall', 'sky-world'];
+const LANDMARK_MODELS = ['sky-tower', 'ferry-building', 'britomart', 'civic-theatre', 'town-hall', 'sky-world', 'st-kevins'];
 
 export default {
   name: 'buildings',

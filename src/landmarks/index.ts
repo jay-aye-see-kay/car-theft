@@ -5,7 +5,8 @@ import { ferryBuilding } from './ferry-building.ts';
 import { skyTower } from './sky-tower.ts';
 import { aoteaSquare } from './aotea-square.ts';
 import { skyWorld } from './sky-world.ts';
+import { myersParkSteps, stKevins } from './st-kevins.ts';
 import { townHall } from './town-hall.ts';
 
 /** Every hand-made landmark model, placed where the manifest has a record with its id. */
-export const LANDMARK_MODELS: LandmarkModel[] = [skyTower, ferryBuilding, chiefPostOffice, civicTheatre, townHall, skyWorld, aoteaSquare];
+export const LANDMARK_MODELS: LandmarkModel[] = [skyTower, ferryBuilding, chiefPostOffice, civicTheatre, townHall, skyWorld, aoteaSquare, stKevins, myersParkSteps];

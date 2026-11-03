@@ -41,9 +41,10 @@ import tweaks from './areas/tweaks.mjs';
 import traffic from './areas/traffic.mjs';
 import cops from './areas/cops.mjs';
 import mapArea from './areas/map.mjs';
+import stKevins from './areas/st-kevins.mjs';
 
 /** In running order. Areas on the same page share it, each starting from __game.reset(). */
-const AREAS = [core, walls, terrain, trees, parks, parked, drive, bridges, buildings, aotea, fly, harbour, boats, budget, missions, labMissions, mapArea, roads, dizzy, peds, traffic, cops, rooms, coop, labCoop, realtime, testTown, phone, tweaks];
+const AREAS = [core, walls, terrain, trees, parks, parked, drive, bridges, buildings, aotea, stKevins, fly, harbour, boats, budget, missions, labMissions, mapArea, roads, dizzy, peds, traffic, cops, rooms, coop, labCoop, realtime, testTown, phone, tweaks];
 
 const PORT = 4179;
 const URL = `http://localhost:${PORT}/?debug`;
