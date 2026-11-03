@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Sunset over the harbour with the Sky Tower: the app icon's colours, readable at 16 px. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2b27a"/>
+      <stop offset="0.55" stop-color="#b8607a"/>
+      <stop offset="1" stop-color="#4a2550"/>
+    </linearGradient>
+    <clipPath id="tile"><rect width="64" height="64" rx="14"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="64" height="64" fill="url(#sky)"/>
+    <circle cx="32" cy="40" r="15" fill="#ffd9a0" opacity="0.9"/>
+    <!-- Skyline -->
+    <path fill="#1a1028" d="M0 51V43h6v-5h6v8h5v-10h7v15h16v-13h6v6h6v-9h6v5h6v12z"/>
+    <!-- Sky Tower: spire, pod, shaft -->
+    <path fill="#1a1028" d="M31 3h2v12h-2z"/>
+    <path fill="#1a1028" d="M26 15h12l-1.5 3h-9z"/>
+    <path fill="#1a1028" d="M27.5 19h9l-2 3h-5z"/>
+    <path fill="#1a1028" d="M29.5 22h5l1 29h-7z"/>
+    <!-- Harbour -->
+    <rect y="51" width="64" height="13" fill="#2a1840"/>
+    <path fill="#c79bff" opacity="0.6" d="M14 54h14v2H14zM36 57h12v2H36zM22 60h8v1.5h-8z"/>
+  </g>
+</svg>
