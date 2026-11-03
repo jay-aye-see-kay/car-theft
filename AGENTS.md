@@ -4,7 +4,7 @@ GTA III-flavoured driving game set in the real Auckland CBD (and Parnell, out to
 phones and desktop. Three.js + Rapier (WASM physics) + TypeScript + Vite,
 deployed to Cloudflare Pages. Goal and data sources: `docs/BRIEF.md`.
 
-**Backlog is GitHub issues** on `jay-aye-see-kay/car-theft-auckland`
+**Backlog is GitHub issues** on `jay-aye-see-kay/car-theft`
 (labels: `next`, `later`, `parked`, `needs-owner`, `blocked`, plus areas). Read
 the issue you're working on, leave short progress notes there as comments if
 you stop partway, and close it with `closes #N` in the commit or PR. Live:
