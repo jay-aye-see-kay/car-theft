@@ -4,3 +4,4 @@ dist/
 *.log
 smoke-shots/
 .cache/
+.snapshot/
