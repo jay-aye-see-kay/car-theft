@@ -52,6 +52,15 @@ export default {
     const parts = await game('breakdown');
     check(parts.peds?.meshes === 1 && drawn > 0, `everyone in one instanced draw call (${drawn} drawn, ${parts.peds?.tris ?? 0} triangles)`);
 
+    // The Low power preset halves the crowd (src/graphics.ts), and Auto brings it back.
+    await game('graphics', 'low');
+    await step(30);
+    const lowCount = (await game('peds')).list.length;
+    await game('graphics', 'auto');
+    await step(60);
+    const backCount = (await game('peds')).list.length;
+    check(lowCount === Math.round(knobs.peds.count / 2) && backCount === knobs.peds.count, `Low power keeps ${lowCount} people about, Auto ${backCount}`);
+
     // Drive up Queen St into someone standing in the lane.
     await getIn();
     const [cx, cz] = along(40);

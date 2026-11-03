@@ -17,6 +17,7 @@ import {
   type Surface,
   type TerrainSamples,
 } from './format.ts';
+import { QUALITY } from '../graphics.ts';
 import { TerrainChunk } from './terrain-chunk.ts';
 import type { TerrainLayout } from './terrain-mesh.ts';
 
@@ -40,23 +41,16 @@ const DETAIL_OUT = 120;
 const COLLIDE_IN = 300;
 const COLLIDE_OUT = 400;
 const MAX_IN_FLIGHT = 6;
-/**
- * Road meshes are drawn only this close: beyond it they're a few pixels
- * wide and the terrain's land-use tint already shows the streets, so each
- * far chunk saves a draw call.
- */
-const ROAD_DRAW = 500;
-/** Buildings' small detail (verandahs, parapets) is drawn only this close, m. */
-const BUILDING_DETAIL = 250;
-/** ...and the finest (cornices and string courses, rooftop plant, eaves' soffits) only this close. */
-const BUILDING_FINE = 120;
-/**
- * Trees and park edges are drawn tile by tile (see BuildingMesh.groups)
- * only this close, m: there are thousands, and a whole chunk's worth would
- * cost a street view thousands of triangles for trees a few pixels across.
- * Beyond it the ground draws the trees' canopy instead (TerrainParts.colShaded).
- */
-const TREE_DRAW = 200;
+// Road meshes are drawn only within QUALITY.roadDraw (500 m at Auto): beyond
+// it they're a few pixels wide and the terrain's land-use tint already shows
+// the streets, so each far chunk saves a draw call.
+// Buildings' small detail (verandahs, parapets) is drawn only within QUALITY.buildingDetail (250 m),
+// and the finest (cornices and string courses, rooftop plant, eaves' soffits) within QUALITY.buildingFine (120 m).
+// Trees and park edges are drawn tile by tile (see BuildingMesh.groups)
+// only within QUALITY.treeDraw (200 m): there are thousands, and a whole chunk's worth would
+// cost a street view thousands of triangles for trees a few pixels across.
+// Beyond it the ground draws the trees' canopy instead (TerrainParts.colShaded).
+// All four come from the graphics preset (src/graphics.ts), read each update.
 /** A chunk asked for explicitly (teleport, debug probe) is kept this long even if out of range, ms. */
 const PIN_MS = 5000;
 
@@ -278,7 +272,7 @@ export class ChunkStreamer {
     }
   }
 
-  /** Near terrain (2 m tiles) for chunks with any tile in detail range; roads within ROAD_DRAW. */
+  /** Near terrain (2 m tiles) for chunks with any tile in detail range; roads within QUALITY.roadDraw. */
   private updateMesh(slot: Slot, d: number): void {
     const mesh = slot.mesh!;
     const chunk = slot.chunk!;
@@ -302,7 +296,8 @@ export class ChunkStreamer {
     }
     let groups: Uint8Array | null = null;
     const gs = mesh.groupSide;
-    if (gs && d < TREE_DRAW) {
+    const treeDraw = QUALITY.treeDraw;
+    if (gs && d < treeDraw) {
       const size = this.manifest.chunkSize / gs;
       groups = slot.groups ??= new Uint8Array(gs * gs);
       for (let r = 0; r < gs; r++) {
@@ -310,11 +305,11 @@ export class ChunkStreamer {
           const tx = chunk.x + c * size;
           const tz = chunk.z + r * size;
           const td = Math.hypot(Math.max(tx - this.focus.x, 0, this.focus.x - tx - size), Math.max(tz - this.focus.z, 0, this.focus.z - tz - size));
-          groups[r * gs + c] = td < TREE_DRAW ? 1 : 0;
+          groups[r * gs + c] = td < treeDraw ? 1 : 0;
         }
       }
     }
-    mesh.update(d < ROAD_DRAW, tiles, d < BUILDING_FINE ? 2 : d < BUILDING_DETAIL ? 1 : 0, groups);
+    mesh.update(d < QUALITY.roadDraw, tiles, d < QUALITY.buildingFine ? 2 : d < QUALITY.buildingDetail ? 1 : 0, groups);
   }
 
   private addColliders(slot: Slot): void {

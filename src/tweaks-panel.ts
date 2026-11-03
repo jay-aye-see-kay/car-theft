@@ -1,3 +1,4 @@
+import { graphicsSection } from './graphics-panel.ts';
 import { allSections, changedValues, onTweak, resetValues, setValue, type Section } from './tweaks.ts';
 
 // The ? button and its panel: every registered mechanic (an on/off switch
@@ -47,6 +48,8 @@ export class TweaksPanel {
     this.body = q('[data-body]');
     this.countEl = q('[data-count]');
     this.copyOut = q('[data-out]');
+    // Graphics first: it's the one players come for (and it isn't a tuning knob).
+    this.body.appendChild(graphicsSection());
     for (const s of allSections()) this.body.appendChild(this.section(s));
 
     this.button.addEventListener('pointerup', () => this.toggle());

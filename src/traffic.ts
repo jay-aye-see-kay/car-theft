@@ -3,6 +3,7 @@ import { TUNING, type Car, type DriveControls } from './car.ts';
 import { COROLLA } from './corolla.ts';
 import type { Dir, RoadEdge, RoadGraph } from './city/road-graph.ts';
 import { rng } from './peds.ts';
+import { crowd } from './graphics.ts';
 import { knob, mechanic } from './tweaks.ts';
 
 // The town's own cars (#29): traffic driving the road graph, and more cars
@@ -309,10 +310,10 @@ export class Town {
       const off = (t.pool === 'traffic' ? !TRAFFIC.on : t.pool === 'parked' ? !PARKED.on : this.patrols < 0) && t.kind !== 'loose';
       if (off || d > FORGET || (d > radius * DESPAWN && !inView(p.x - focus.x, p.z - focus.z, yaw))) this.remove(t);
     }
-    this.trim('traffic', TRAFFIC.on ? TRAFFIC.count : 0, focus, yaw);
-    this.trim('parked', PARKED.on ? PARKED.count : 0, focus, yaw);
+    this.trim('traffic', TRAFFIC.on ? crowd(TRAFFIC.count) : 0, focus, yaw);
+    this.trim('parked', PARKED.on ? crowd(PARKED.count) : 0, focus, yaw);
     this.trim('patrol', Math.max(0, this.patrols), focus, yaw);
-    if (TRAFFIC.on) this.spawnTraffic('traffic', TRAFFIC.count, focus, yaw, obstacles);
+    if (TRAFFIC.on) this.spawnTraffic('traffic', crowd(TRAFFIC.count), focus, yaw, obstacles);
     if (this.patrols > 0) this.spawnTraffic('patrol', this.patrols, focus, yaw, obstacles);
     if (PARKED.on) this.spawnParked(focus, yaw, obstacles);
     for (const t of this.list) if (t.kind === 'driving') this.drive(t, dt, obstacles);
@@ -440,7 +441,7 @@ export class Town {
 
   private spawnParked(focus: { x: number; z: number }, yaw: number, obstacles: Obstacles): void {
     const live = this.list.filter((t) => t.pool === 'parked' && t.kind === 'parked').length;
-    if (live >= PARKED.count) return;
+    if (live >= crowd(PARKED.count)) return;
     const t = this.free('parked');
     if (!t) return;
     const r = PARKED.spawnRadius;

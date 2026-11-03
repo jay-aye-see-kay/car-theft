@@ -831,6 +831,47 @@ body {
   opacity: 0.8;
 }
 
+/* Graphics (src/graphics-panel.ts): three presets side by side, then the fps switch. */
+.tw-presets {
+  display: flex;
+  gap: 6px;
+}
+
+#tweaks-panel .tw-presets button {
+  flex: 1;
+  min-height: 44px;
+  padding: 6px 4px;
+}
+
+#tweaks-panel .tw-presets button[aria-checked='true'] {
+  background: #6b4a9a;
+  border-color: #c79bff;
+}
+
+.tw-note {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.tw-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  font-size: 14px;
+}
+
+#tweaks-panel .tw-row .tw-switch {
+  min-width: 64px;
+  min-height: 40px;
+}
+
+.tw-section .tw-switch.off {
+  background: #4a2030 !important;
+  border-color: #a05070 !important;
+}
+
 /* Speech bubbles over pedestrians (src/bubbles.ts). */
 .bubbles {
   position: absolute;

@@ -1,6 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type { Dir, RoadEdge, RoadGraph } from './city/road-graph.ts';
+import { crowd } from './graphics.ts';
 import { knob, mechanic } from './tweaks.ts';
 
 // Pedestrians: a handful of people walking the footpaths near the player,
@@ -635,7 +636,7 @@ export class Peds {
       const p = this.list[i];
       if (!p.pinned && !p.kept && Math.hypot(p.x - focus.x, p.z - focus.z) > far) this.list.splice(i, 1);
     }
-    while (this.list.filter((p) => !p.kept).length > PEDS.count) {
+    while (this.list.filter((p) => !p.kept).length > crowd(PEDS.count)) {
       // The furthest first.
       let worst = -1;
       let worstD = -1;
@@ -653,7 +654,7 @@ export class Peds {
 
   /** Up to the count, one a tick: on a footpath near the focus, out of the camera's view (or far off). */
   private spawn(focus: { x: number; z: number }, yaw: number): void {
-    if (this.list.filter((p) => !p.pinned && !p.kept).length >= PEDS.count) return;
+    if (this.list.filter((p) => !p.pinned && !p.kept).length >= crowd(PEDS.count)) return;
     const spot = this.pickSpot(focus, yaw, MIN_SPAWN, PEDS.spawnRadius, VIEW_FAR);
     if (!spot) return;
     const p = this.make(spot.edge, spot.dir, spot.s, spot.side, spot.x, spot.z);

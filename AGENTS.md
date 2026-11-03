@@ -58,6 +58,12 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   hulls. `?debug`: `__game.boats()`, `besideBoat(i)`, `boardBoat(i, x?, z?, heading?)`; `state()` has `mode: 'boat'`,
   `nearBoat`. Smoke: `boats.mjs`.
 - `src/sky.ts`, `src/sun.ts`, `src/splash.ts` (title screen with data credits)
+- `src/graphics.ts` (`QUALITY`): the graphics preset, a player setting at the top of the ? panel (`graphics-panel.ts`),
+  kept apart from the knobs (`gta.graphics`; Reset and Copy leave it). Low power: 30 fps cap, 0.75–1x resolution, no
+  MSAA, shorter road/detail/tree distances, half the crowd (`crowd()`), minimap at 10 Hz. Auto (default, what the phone
+  budget is measured at): 60 fps cap, adaptive 0.75–2x, MSAA only under 1.5x. High: uncapped, further detail. Read
+  live except MSAA (next load). Auto hints at Low power after 10 s slow at the lowest resolution. Show FPS puts the
+  readout by the minimap. `?debug`: `__game.graphics(preset?, showFps?)`; `state()` has `graphics`, `pixelRatio`.
 - **Experiments** (#53 on): v1 is a lab for finding out what's fun. Tone: cheeky, not violent (`docs/BRIEF.md`).
   - `src/tweaks.ts` + `src/tweaks-panel.ts`: the **? panel** (button by mute, `?` key), the playtest
     tool. The game pauses while it's open. A mechanic registers its own section where it's defined:

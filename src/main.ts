@@ -17,6 +17,7 @@ import { Player } from './player.ts';
 import { SkidMarks } from './skids.ts';
 import { DizzyStars } from './stars.ts';
 import { allValues, resetValues, setValue, useStorage } from './tweaks.ts';
+import { onGraphics, QUALITY, setPreset, setShowFps, useGraphicsStorage, type Preset } from './graphics.ts';
 import { TweaksPanel } from './tweaks-panel.ts';
 import { Sky } from './sky.ts';
 import { SUN_DIRECTION } from './sun.ts';
@@ -120,12 +121,32 @@ async function main() {
   // Only the -compat build needs init(); the browser build (see vite.config.ts) is ready on import.
   await (RAPIER as { init?: () => Promise<void> }).init?.();
 
+  const storage = (() => {
+    try {
+      return localStorage;
+    } catch {
+      return null; // blocked (some private modes): best times, tuning and graphics just aren't kept
+    }
+  })();
+  // The ? panel's tuning from last time, before anything is built from it.
+  useStorage(storage);
+  // The graphics preset (Low power / Auto / High), before the renderer's made: antialiasing is fixed then.
+  useGraphicsStorage(storage);
+
   // Renderer: start at a modest pixel ratio on phones and adapt from there.
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  const msaa = QUALITY.msaa === 'on' || (QUALITY.msaa === 'low-dpi' && devicePixelRatio < 1.5);
+  const renderer = new THREE.WebGLRenderer({ antialias: msaa, powerPreference: 'high-performance' });
   const coarse = matchMedia('(pointer: coarse)').matches;
-  // Past 2x the extra pixels cost far more fill rate than they show.
-  const maxRatio = Math.min(devicePixelRatio, 2);
-  let pixelRatio = Math.min(devicePixelRatio, coarse ? 1.5 : 2);
+  // The preset's range, capped at the screen's own (past 2x the extra pixels cost far more fill rate than they show).
+  const ratioRange = () => {
+    const max = Math.min(devicePixelRatio, QUALITY.maxRatio);
+    return { min: Math.min(QUALITY.minRatio, max), max };
+  };
+  const clampRatio = (r: number) => {
+    const { min, max } = ratioRange();
+    return Math.min(max, Math.max(min, r));
+  };
+  let pixelRatio = clampRatio(coarse ? 1.5 : 2);
   renderer.setPixelRatio(pixelRatio);
   // Sized from #app's box, not innerWidth/innerHeight: iOS Safari reports
   // stale ones for a moment after rotating, which stretched the picture.
@@ -167,13 +188,6 @@ async function main() {
   const splashes = new Splash();
   scene.add(splashes.points);
 
-  const storage = (() => {
-    try {
-      return localStorage;
-    } catch {
-      return null; // blocked (some private modes): best times and tuning just aren't kept
-    }
-  })();
   // The ? panel's tuning from last time, before anything is built from it.
   useStorage(storage);
 
@@ -323,6 +337,12 @@ async function main() {
   let paused = false;
   const tweaksPanel = new TweaksPanel(hud);
   tweaksPanel.toast = (text) => roomPanel.toast(text);
+  // A new preset: resolution into its range at once (the frame cap and draw distances are read live).
+  onGraphics(() => {
+    pixelRatio = clampRatio(pixelRatio);
+    renderer.setPixelRatio(pixelRatio);
+    if (!QUALITY.showFps && !debug) fpsEl.textContent = '';
+  });
   const fullMap = chart ? new FullMap(hud, chart, nav, () => mapScene()) : null;
   const pause = () => {
     paused = tweaksPanel.isOpen || !!fullMap?.open;
@@ -812,6 +832,12 @@ async function main() {
   let fpsFrames = 0;
   let fpsTime = 0;
   let fps = 60;
+  /** Seconds in a row on Auto at the lowest resolution and still under 40 fps; the Low power hint shows at SLOW_HINT_AFTER. */
+  let slowSeconds = 0;
+  let slowHinted = false;
+  const SLOW_HINT_AFTER = 10;
+  /** Seconds since the minimap was last drawn (the preset may draw it less often than every frame). */
+  let minimapDue = 0;
   const _p = new THREE.Vector3();
   const _a = new THREE.Vector3();
 
@@ -1336,7 +1362,13 @@ async function main() {
       missionHud.update(view);
     }
     // Stepped tests (manual) keep the route up to date but only draw the minimap when they draw a frame.
-    if (minimap && !manual) drawMinimap(frameDt);
+    if (minimap && !manual) {
+      minimapDue += frameDt;
+      if (!QUALITY.minimapHz || minimapDue >= 1 / QUALITY.minimapHz) {
+        drawMinimap(minimapDue);
+        minimapDue = 0;
+      } else navigate();
+    }
     else if (minimap) navigate();
   };
 
@@ -1416,6 +1448,9 @@ async function main() {
   };
 
   renderer.setAnimationLoop((now) => {
+    // The preset's frame cap: skip this display frame if the last one drawn was too recent. The slack
+    // (a quarter of a 60 Hz frame) keeps rAF's jitter from dropping every other frame at 60 on 60 Hz.
+    if (!manual && QUALITY.maxFps && now - last < 1000 / QUALITY.maxFps - 4) return;
     const t0 = performance.now();
     const frameDt = Math.min((now - last) / 1000, 0.1);
     last = now;
@@ -1445,9 +1480,20 @@ async function main() {
     fpsTime += frameDt;
     if (fpsTime >= 1) {
       fps = fpsFrames / fpsTime;
-      if (fps < 45 && pixelRatio > 0.75) pixelRatio = Math.max(0.75, pixelRatio - 0.25);
-      else if (fps > 58 && pixelRatio < maxRatio) pixelRatio = Math.min(maxRatio, pixelRatio + 0.25);
+      // Against the preset's frame cap (60 when there's none), so Low power's 30 isn't taken for struggling.
+      const target = QUALITY.maxFps || 60;
+      const range = ratioRange();
+      if (fps < target * 0.75 && pixelRatio > range.min) pixelRatio = Math.max(range.min, pixelRatio - 0.25);
+      else if (fps > target - 2 && pixelRatio < range.max) pixelRatio = Math.min(range.max, pixelRatio + 0.25);
       if (renderer.getPixelRatio() !== pixelRatio) renderer.setPixelRatio(pixelRatio);
+      // Still slow at the lowest resolution on Auto for a while: point at Low power, once.
+      slowSeconds = started && !paused && QUALITY.preset === 'auto' && pixelRatio <= range.min && fps < 40 ? slowSeconds + 1 : 0;
+      if (slowSeconds === SLOW_HINT_AFTER && !slowHinted) {
+        slowHinted = true;
+        roomPanel.toast('Running hot? Try Low power in the ? panel');
+      }
+      if (QUALITY.showFps && !debug) fpsEl.textContent = `${fps.toFixed(0)} fps · ${pixelRatio.toFixed(2)}x`;
+      else if (!debug) fpsEl.textContent = '';
       if (debug) {
         const { render, memory } = renderer.info;
         fpsEl.textContent =
@@ -1539,6 +1585,9 @@ async function main() {
         carsDrawn: fleet.drawn,
         audio: audio.state,
         fps,
+        /** The graphics preset and the resolution adaptive scaling has settled on. */
+        graphics: QUALITY.preset,
+        pixelRatio,
         /** Draw calls and triangles in the last rendered frame. */
         drawCalls: renderer.info.render.calls,
         triangles: renderer.info.render.triangles,
@@ -1831,6 +1880,12 @@ async function main() {
       skipCaught: () => cops?.skip(),
       /** Every ? panel value by section, or set one: knob('dizzy.on', false), knob('peds.count', 4). */
       knobs: () => allValues(),
+      /** The graphics preset ('low' | 'auto' | 'high'), or set it (and the fps readout). */
+      graphics: (preset?: Preset, showFps?: boolean) => {
+        if (preset) setPreset(preset);
+        if (showFps !== undefined) setShowFps(showFps);
+        return { ...QUALITY };
+      },
       knob: (path: string, value: number | boolean) => {
         const [id, key] = path.split('.');
         setValue(id, key, value);
@@ -1914,6 +1969,7 @@ async function main() {
         nav.reset();
         mapRadius = MAP_RADIUS;
         resetValues();
+        setPreset('auto');
         dizzy.reset();
         cops?.reset();
         copsHud.hideTicket();

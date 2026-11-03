@@ -40,6 +40,22 @@ export default {
     await page.locator('#tweaks-panel [data-reset]').tap();
     const after = (await game('knobs')).dizzy.fallSpeed;
     check(after === 13 && (await page.evaluate(() => localStorage.getItem('gta.tweaks'))) === '{}', `Reset puts it back (${after})`);
+    // Graphics: a player setting at the top, kept apart from the knobs (Reset leaves it).
+    const low = page.locator('[data-section="graphics"] [data-preset="low"]');
+    check(sections[0] === 'graphics' && (await low.isVisible()), 'Graphics comes first in the panel');
+    await low.tap();
+    await page.locator('[data-section="graphics"] [data-fps]').tap();
+    const g = await state();
+    const gSaved = await page.evaluate(() => JSON.parse(localStorage.getItem('gta.graphics') ?? '{}'));
+    check(
+      g.graphics === 'low' && g.pixelRatio <= 1 && gSaved.preset === 'low' && gSaved.showFps === true && (await low.getAttribute('aria-checked')) === 'true',
+      `Low power: picked, resolution down to ${g.pixelRatio}x, saved with the fps readout (${JSON.stringify(gSaved)})`,
+    );
+    await page.locator('#tweaks-panel [data-reset]').tap();
+    check((await state()).graphics === 'low', 'Reset leaves the graphics preset alone');
+    await page.locator('[data-section="graphics"] [data-preset="auto"]').tap();
+    await page.locator('[data-section="graphics"] [data-fps]').tap();
+    check((await state()).graphics === 'auto', 'back to Auto');
     await page.locator('#tweaks-panel [data-close]').tap();
     check(!(await state()).paused && !(await panel.isVisible()), 'closing it carries on playing');
   },
