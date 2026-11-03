@@ -8,7 +8,7 @@ import { deserialize, serialize } from 'node:v8';
 import { fileURLToPath } from 'node:url';
 import { fromFile } from 'geotiff';
 import type { OsmData } from '../citygen/osm.ts';
-import { bboxToNztmExtent } from '../citygen/project.ts';
+import { bboxToNztmExtent, type BBox } from '../citygen/project.ts';
 import { loadRaster, saveRaster, type Raster, type RasterKind } from '../citygen/raster.ts';
 import { loadManifest, snapshotFile } from '../snapshot/files.ts';
 import { SNAPSHOT_ID } from '../snapshot/sources.ts';
@@ -25,12 +25,12 @@ const OSM_PBF = 'osm/bbbike-auckland-2026-10-31.osm.pbf';
 
 export const areaCache = (area: Area) => join(CACHE2, `${area.id}@${SNAPSHOT_ID}`);
 
-async function loadOsm(area: Area, dir: string): Promise<OsmData> {
-  const file = join(dir, 'osm.v8');
+/** OSM touching a box (see pbf.ts), cached under `name`. */
+export async function loadOsm(bbox: BBox, dir: string, name = 'osm', complete = true): Promise<OsmData> {
+  const file = join(dir, `${name}.v8`);
   if (existsSync(file)) return deserialize(readFileSync(file)) as OsmData;
-  const [w, s, e, n] = area.bbox, p = area.osmPad;
   const t = Date.now();
-  const { osm, stats } = readPbf(await snapshotFile(OSM_PBF), [w - p, s - p, e + p, n + p]);
+  const { osm, stats } = readPbf(await snapshotFile(OSM_PBF), bbox, complete);
   console.log(`  OSM: ${stats.ways} ways, ${stats.relations} relations, ${stats.nodes} nodes (of ${stats.nodesInFile} in the extract), ${((Date.now() - t) / 1000).toFixed(1)} s`);
   writeFileSync(file, serialize(osm));
   return osm;
@@ -74,7 +74,8 @@ async function loadLayer(kind: RasterKind, area: Area, dir: string): Promise<Ras
 export async function loadInputs(area: Area): Promise<Inputs> {
   const dir = areaCache(area);
   mkdirSync(dir, { recursive: true });
-  const osm = await loadOsm(area, dir);
+  const [w, s, e, n] = area.bbox, p = area.osmPad;
+  const osm = await loadOsm([w - p, s - p, e + p, n + p], dir);
   const dem = await loadLayer('dem', area, dir);
   const dsm = await loadLayer('dsm', area, dir);
   return { area, osm, dem, dsm };

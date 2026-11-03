@@ -36,14 +36,18 @@ import { buildSeawalls } from './seawalls.ts';
 import { buildRoads, roadNetwork, roadTris as roadTrisByKind } from './roads.ts';
 import { APRON, buildTerrainChunk, CELL_SIZE, CHUNK_SIZE, chunkGrid, SAMPLES, SEA_SHELF, TerrainSampler, WATER_LEVEL } from './terrain.ts';
 
-const AREA = 'cbd';
+// CITYGEN_GROUND=v2 builds on world gen v2's ground instead (tools/citygen2/v1-bridge.ts, #58),
+// into public/city/v2/; the hand fixes and Wikidata facts are still the CBD's.
+const V2 = process.env.CITYGEN_GROUND === 'v2';
+const AREA = V2 ? 'v2' : 'cbd';
+const HAND = 'cbd';
 const OUT = fileURLToPath(new URL(`../../public/city/${AREA}/`, import.meta.url));
 
-const data = await loadCityData(CBD_BBOX);
+const data = V2 ? await (await import('../citygen2/v1-bridge.ts')).v2CityData(CBD_BBOX) : await loadCityData(CBD_BBOX);
 // Hand fixes first, so everything downstream reads the corrected tags.
-const overrides = Overrides.load(AREA);
+const overrides = Overrides.load(HAND);
 const stale = overrides.apply(data.osm);
-for (const w of stale) console.warn(`overrides/${AREA}.json: ${w}`);
+for (const w of stale) console.warn(`overrides/${HAND}.json: ${w}`);
 console.log(`Overrides: ${overrides.size} entries, ${stale.length} stale`);
 // Piers the LiDAR sees through go back into the DEM before anything samples it.
 const piers = layPiers(data.osm, data.dem, overrides);
@@ -64,7 +68,7 @@ console.log(`Smoothed ${smoothed} lattice points under streets and park paths`);
 const terrainSampler = new TerrainSampler(data.dem);
 const network = roadNetwork(data, terrainSampler, overrides);
 const frontages = new Frontages(data.osm);
-const wikidata = loadWikidata(AREA);
+const wikidata = loadWikidata(HAND);
 const blds = buildBuildings(data, grid, { overrides, deckAt: network.deckAt, frontages, wikidata });
 const c = blds.counts;
 console.log(
@@ -86,7 +90,7 @@ const walls = buildSeawalls(data.dem, grid, terrainSampler, (x, z) => {
   let mb = blds.chunks.get(`${i},${j}`);
   if (!mb) blds.chunks.set(`${i},${j}`, (mb = new MeshBuilder()));
   return mb;
-}, piers.decked);
+}, piers.decked, V2 ? 200 : Infinity);
 console.log(`Sea walls: ${walls.km.toFixed(1)} km along ${walls.lines} coastlines`);
 // A deck reaching over the grid's edge goes in the nearest chunk (its burnt ground inside the grid needs covering).
 const decks = buildDecks(piers.decks, (x, z) => {
@@ -271,5 +275,5 @@ console.log(
     `largest ${(maxRoadBytes / 1024).toFixed(0)} KB, ${roadVerts} vertices, ${roadTris} triangles; ground ${(groundBytes / 1024).toFixed(0)} KB`,
 );
 // The map picture, from the chunks just written.
-writeMap();
+writeMap(OUT);
 console.log(`Total ${(size(OUT) / 1024).toFixed(0)} KB in ${OUT}`);

@@ -7,12 +7,12 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { collectRoads } from '../citygen/roads.ts';
-import { lonLatToLocal, type Local } from '../citygen/project.ts';
+import { lonLatToLocal } from '../citygen/project.ts';
 import { sampleLocal, type Raster } from '../citygen/raster.ts';
 import { AUCKLAND_10K, type Area } from './area.ts';
 import { Canvas, hillshade, hypsometric, shaded, view, type Rgb, type View } from './debug.ts';
 import { areaCache, loadInputs } from './inputs.ts';
-import { carveCoast, fieldFromRaster, roadProfiles, sampleField, shapeToRoads, type Field } from './terrain.ts';
+import { carveCoast, coastLines, fieldFromRaster, roadProfiles, sampleField, shapeToRoads, type Field } from './terrain.ts';
 
 /** Close-ups, 600 m across at 0.5 m per pixel. */
 const SPOTS: Record<string, [number, number]> = {
@@ -63,9 +63,7 @@ async function main() {
   console.log(`v2 ${area.id}`);
   const inputs = await loadInputs(area);
   const roads = collectRoads(inputs.osm);
-  const coast: Local[][] = [...inputs.osm.ways.values()]
-    .filter((w) => w.tags.natural === 'coastline')
-    .map((w) => w.nodes.map((id) => inputs.osm.nodes.get(id)!).filter(Boolean).map((n) => lonLatToLocal(n.lon, n.lat)));
+  const coast = coastLines(inputs.osm);
 
   if (run('inputs')) {
     // Stage 0, the raw inputs together: the DEM, OSM's roads and OSM's coastline, to see where they disagree.

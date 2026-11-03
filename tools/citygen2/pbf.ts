@@ -244,8 +244,12 @@ class NodeIndex {
 
 export type PbfStats = { nodesInFile: number; ways: number; relations: number; nodes: number };
 
-/** Reads a .osm.pbf and keeps what touches bbox (see the header). */
-export function readPbf(path: string, bbox: BBox): { osm: OsmData; stats: PbfStats } {
+/**
+ * Reads a .osm.pbf and keeps what touches bbox (see the header). With
+ * `complete` off, multipolygons aren't completed: exactly the OSM API's
+ * view, which v1 was written against.
+ */
+export function readPbf(path: string, bbox: BBox, complete = true): { osm: OsmData; stats: PbfStats } {
   const file = readFileSync(path);
   const [w, s, e, n] = bbox;
   const inBox = (lat: number, lon: number) => lon >= w && lon <= e && lat >= s && lat <= n;
@@ -277,7 +281,7 @@ export function readPbf(path: string, bbox: BBox): { osm: OsmData; stats: PbfSta
     if (r.tags.type !== 'multipolygon') continue;
     for (const m of r.members) if (m.type === 'way' && !ways.has(m.ref)) want.add(m.ref);
   }
-  if (want.size) eachBlock(file, (b) => readBlock(b, { way: (wy) => { if (want.has(wy.id)) ways.set(wy.id, wy); } }));
+  if (complete && want.size) eachBlock(file, (b) => readBlock(b, { way: (wy) => { if (want.has(wy.id)) ways.set(wy.id, wy); } }));
 
   const addNode = (id: number, tags: Tags) => {
     if (osm.nodes.has(id)) return;

@@ -7,8 +7,9 @@
 // The field is the DEM's own 1 m grid in local coordinates (local axes are the
 // NZTM grid, so cells line up exactly; no resampling).
 import { corridorRadius, type Road } from '../citygen/roads.ts';
-import { ORIGIN_NZTM, type Local } from '../citygen/project.ts';
+import { lonLatToLocal, ORIGIN_NZTM, type Local } from '../citygen/project.ts';
 import type { Raster } from '../citygen/raster.ts';
+import type { OsmData } from '../citygen/osm.ts';
 
 export type Field = { x0: number; z0: number; res: number; nx: number; nz: number; h: Float32Array };
 
@@ -168,6 +169,13 @@ export function shapeToRoads(dem: Field, roads: Road[], prof: Profiles): Shaped 
 }
 
 // -------------------------------------------------------------------- coast
+
+/** OSM's coastline ways as local polylines (land on the left). */
+export function coastLines(osm: OsmData): Local[][] {
+  return [...osm.ways.values()]
+    .filter((w) => w.tags.natural === 'coastline')
+    .map((w) => w.nodes.map((id) => osm.nodes.get(id)).filter((n) => n !== undefined).map((n) => lonLatToLocal(n.lon, n.lat)));
+}
 
 /** Sea floor: just below the waterline at the shore, shelving to SEA_DEPTH over SEA_SHELF m. */
 const SEA_SHORE = -1.5, SEA_DEPTH = -8, SEA_SHELF = 40;

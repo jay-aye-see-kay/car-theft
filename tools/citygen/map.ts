@@ -17,12 +17,12 @@ import {
 } from '../../src/city/format.ts';
 import { MAP_COLOURS, MAP_PX, MAP_SHADES } from '../../src/map/style.ts';
 
-const DIR = fileURLToPath(new URL('../../public/city/cbd/', import.meta.url));
+const CBD_DIR = fileURLToPath(new URL('../../public/city/cbd/', import.meta.url));
 
 /** Roofs: triangles whose normal is at least this upright. */
 const UPRIGHT = 0.5;
 
-export function writeMap(): void {
+export function writeMap(DIR = CBD_DIR): void {
   const manifest = JSON.parse(readFileSync(DIR + 'manifest.json', 'utf8')) as CityManifest;
   const { bounds, grid, chunkSize } = manifest;
   const w = Math.round((bounds.maxX - bounds.minX) / MAP_PX);

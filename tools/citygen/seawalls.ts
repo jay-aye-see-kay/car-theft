@@ -36,9 +36,11 @@ type Pt = { x: number; z: number };
 type Wet = (k: number) => boolean;
 
 /** @param decked DEM pixels under decks, 1 each (see layPiers) */
-export function buildSeawalls(dem: Raster, grid: Grid, terrain: TerrainSampler, chunkAt: (x: number, z: number) => MeshBuilder | null, decked?: Uint8Array) {
+export function buildSeawalls(
+  dem: Raster, grid: Grid, terrain: TerrainSampler, chunkAt: (x: number, z: number) => MeshBuilder | null, decked?: Uint8Array, maxSegment = Infinity,
+) {
   const wetPixel: Wet = (k) => isWet(dem.data[k]) || (!!decked && decked[k] === 1);
-  const lines = traceCoast(dem, grid, wetPixel);
+  const lines = traceCoast(dem, grid, wetPixel).map((l) => split(l, maxSegment));
   let metres = 0;
   for (const line of lines) metres += emitWall(line, dem, terrain, chunkAt, wetPixel);
   return { lines: lines.length, km: metres / 1000 };
@@ -129,6 +131,25 @@ function traceCoast(dem: Raster, grid: Grid, wetPixel: Wet): Pt[][] {
 }
 
 /** Douglas-Peucker. */
+/**
+ * Each segment is meshed into the chunk under its middle, whose vertices
+ * must stay within ~327 m of the chunk's centre (src/city/format.ts), so a
+ * long straight wharf edge is cut into pieces no longer than `max`. v2's
+ * crisp coastline (#58) needs it; v1's raggeder one never did, and its
+ * output is left as it was by passing Infinity.
+ */
+function split(pts: Pt[], max: number): Pt[] {
+  if (!Number.isFinite(max)) return pts;
+  const out: Pt[] = [pts[0]];
+  for (let k = 1; k < pts.length; k++) {
+    const a = pts[k - 1], b = pts[k];
+    const n = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / max);
+    for (let j = 1; j < n; j++) out.push({ x: a.x + ((b.x - a.x) * j) / n, z: a.z + ((b.z - a.z) * j) / n });
+    out.push(b);
+  }
+  return out;
+}
+
 function simplify(pts: Pt[], tol: number): Pt[] {
   if (pts.length <= 2) return pts;
   const a = pts[0];
