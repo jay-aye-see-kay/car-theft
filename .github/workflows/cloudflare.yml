@@ -1,0 +1,41 @@
+name: Deploy to Cloudflare Pages
+
+# Every branch deploys: main is production (the custom domain), any other
+# branch is a preview at https://<branch>.cartheft.pages.dev
+# (slashes become dashes, so claude/smash -> claude-smash).
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+# Per-branch, so a push to one branch doesn't cancel another's deploy.
+concurrency:
+  group: cloudflare-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # No sim or smoke gate before deploy (owner's call while there are no
+      # users): run `npm run sim` and `npm run smoke` locally instead.
+      - id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: pages deploy dist --project-name=cartheft --branch=${{ github.ref_name }} --commit-hash=${{ github.sha }}
+      - run: |
+          echo "Deployed: ${{ steps.deploy.outputs.deployment-url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch alias: ${{ steps.deploy.outputs.pages-deployment-alias-url }}" >> "$GITHUB_STEP_SUMMARY"
