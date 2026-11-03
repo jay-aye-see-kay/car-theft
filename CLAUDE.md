@@ -105,6 +105,17 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
     officers; `PROTOCOL` 3); `remote-cops.ts` shows others' as kinematic cars (they block ours) and officers.
     `?debug`: `__game.cops()`, `setHeat(n)`, `spawnCop('foot' | 'bike' | 'car', x, z, heading, chasing)`,
     `roadblock()`, `skipCaught()`, `remoteCopCars()`, `parking()`; `state()` has `heat`, `seen`, `caught`, `flat`.
+  - `src/smash.ts` (`SMASH`, #48): street furniture and trees a car can knock down. citygen records each lamp, signal,
+    stop, shelter, bench, bin and tree as a prop in its buildings chunk (kind, foot, height, trunk radius and its
+    contiguous run of vertices; `MeshBuilder.prop`, format flag bit 6); `BuildingChunk` gives each a small fixed
+    collider (`PROP_SHAPES`; trunks are no longer in the chunk's trimesh). Before each physics step, every moving car's
+    next two ticks are checked against props near it: faster *into* one than its break speed (`toughness`: bins and
+    benches 10 km/h, lamps and stops 25, signals 35, shelters 40, trees 30 small to 75 at `bigTree` m) and its collider
+    goes, the car loses a share of that speed (`Car.knocked`, not an impact) and the prop's vertices are collapsed in
+    the chunk mesh while a copy topples from its foot (bins and benches are flung). Slower and it's a wall. Fallen
+    copies are one mesh with the city material (one draw call while any are down), not solid, and stand back up past
+    `respawn` m when out of view (or when their chunk unloads). Any car knocks things down, the cops don't care, each
+    client runs its own. `audio.smash()`. `?debug`: `__game.smashed()`, `props(x, z, r?, kind?)`. Smoke: `smash.mjs`.
 - `src/maps/`: `auckland.ts` (default) and `test-town.ts` (`?map=test`)
 - `src/missions/`: one file per mission (`defineMission`, picked up by `import.meta.glob`).
   `runtime/`: `mission.ts` (the script API), `runner.ts` (runs scripts in game time; a mission
@@ -153,7 +164,7 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   Places: `places.ts` (OSM POIs → `places.json`, marker on the kerb outside), `names.ts` (parody
   names: brand table, hand-written lists per kind, templates; no real business name may leak).
   Parks: `ground.ts` (land use, park paths, canopy cover: shade near, canopy tint far), `trees.ts` (OSM trees plus
-  LiDAR treetops on green ground and tree-shaped ones over footpaths), `barriers.ts` (park edges: walls, fences,
+  LiDAR treetops on green ground and tree-shaped ones over footpaths; each a prop, see `src/smash.ts`), `barriers.ts` (park edges: walls, fences,
   hedges, retaining walls, and a default low hedge where a park meets a footpath).
 - `scripts/smoke/` (Playwright: `run.mjs`, one file per area; the map in `map.mjs`), `scripts/sim-car.ts`. Experiments:
   `dizzy.mjs`, `peds.mjs`, `traffic.mjs`, `cops.mjs`, `tweaks.mjs` (the panel on the phone page); hooks `__game.dizzy()`, `peds()`, `town()`,
@@ -190,7 +201,7 @@ Measured at `__game.view('spawn' | 'queen-st' | 'aerial')` with `?debug`
 
 Street view is ~140–148k / ~40 today (a visible mission marker is one call; pedestrians are
 two calls and ~170 triangles each, dizzy stars one call when anyone's dizzy; police light bars one call when a
-police car's in view, bikes, spike strips and cones one each when there are any; cars are five calls however many,
+police car's in view, bikes, spike strips and cones one each when there are any, knocked-down props one while any are down; cars are five calls however many,
 ~820 triangles each within 40 m, ~350 to 80 m, ~50 beyond; street view varies a few k with traffic in it). Each chunk is one draw call: put new static
 geometry into `ChunkMesh` (vertex colours, shared materials/atlas), not new
 meshes. Small building detail goes in `MeshBuilder.detail()`: near-only

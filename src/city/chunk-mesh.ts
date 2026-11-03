@@ -37,6 +37,18 @@ export class ChunkMesh {
     this.mesh.position.set(cx, 0, cz);
     this.mesh.matrixAutoUpdate = false;
     this.mesh.updateMatrix();
+    // A prop knocked down or stood back up (src/smash.ts): copy its vertices across.
+    if (buildings) buildings.onVertices = (first, count) => this.refreshBuildings(first, count);
+  }
+
+  private refreshBuildings(first: number, count: number): void {
+    const b = this.buildings;
+    const position = this.mesh.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!b || !position) return;
+    const at = ((this.roads?.count ?? 0) + first) * 3;
+    (position.array as Float32Array).set(b.pos.subarray(first * 3, (first + count) * 3), at);
+    position.addUpdateRange(at, count * 3);
+    position.needsUpdate = true;
   }
 
   /** Whether the near (tiled) terrain parts are in the vertex buffers. */
@@ -204,6 +216,7 @@ export class ChunkMesh {
   }
 
   dispose(): void {
+    if (this.buildings) this.buildings.onVertices = null;
     this.mesh.geometry.dispose();
     this.parts = null;
     this.index = null;

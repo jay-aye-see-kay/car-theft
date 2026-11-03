@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
 import type { RoadGraph } from '../city/road-graph.ts';
+import type { Prop } from '../city/building-chunk.ts';
 import type { Gazetteer } from '../missions/runtime/places.ts';
 
 // What the game loop needs from a map. The test town and Auckland both
@@ -73,6 +74,18 @@ export interface GameMap {
   sync(): void;
   /** Surface under a point ('road', 'footpath', 'grass', ...), null if unknown or not loaded. */
   surfaceAt?(x: number, z: number): string | null;
+  /**
+   * Street furniture and trees a car can knock down (src/smash.ts): those
+   * standing near a point (in chunks with colliders), whether a prop's chunk
+   * is still loaded, and the material their chunks are drawn with.
+   */
+  readonly props?: {
+    near(x: number, z: number, r: number, f: (p: Prop) => void): void;
+    holds(p: Prop): boolean;
+    material: THREE.Material;
+    /** Leave out (for good) any prop in these footprints: heading h faces (cos h, -sin h), `halfL` along it, `halfW` across. */
+    keepClear(boxes: { x: number; z: number; heading: number; halfL: number; halfW: number }[]): void;
+  };
   /** Tree canopy over a point, 0..1 (debug probe). */
   canopyAt?(x: number, z: number): number | null;
   /**

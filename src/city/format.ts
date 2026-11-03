@@ -184,10 +184,41 @@ export function decodeTerrain(bytes: Uint8Array): TerrainSamples {
 //              (row-major, rows along z), each drawn only near the player:
 //              group t runs from offset t to offset t+1 (trees)
 //      u16|u32 render indices, then collider indices (zigzagged deltas)
+//      u32     (flag bit 6) prop count, then per prop (PROP_BYTES each):
+//              u8 kind (PROP_KINDS), u8 heading (1/256 turns), u16 vertex
+//              count, u32 first vertex, i16 x, i16 z (cm from the chunk
+//              centre), u16 y (cm above base), u16 height (cm), u8 radius (cm)
 // Delta coding keeps neighbouring vertices of a building tiny for deflate.
 const BUILDINGS_MAGIC = 0x42415447; // 'GTAB'
 const BUILDINGS_VERSION = 1;
 const BUILDINGS_HEADER = 24;
+const PROP_BYTES = 17;
+
+/**
+ * Things a car can knock down (src/smash.ts): street furniture and trees.
+ * Each is baked into its chunk's mesh like any other detail, but its
+ * vertices are a contiguous run the game can hide, and copy out to draw
+ * falling over.
+ */
+export const PROP_KINDS = ['lamp', 'signal', 'shelter', 'stop', 'bench', 'bin', 'broadleaf', 'palm', 'conifer', 'pohutukawa'] as const;
+export type PropKind = (typeof PROP_KINDS)[number];
+
+/** A knock-down-able prop in a chunk file, in the file's units. */
+export interface PropRecord {
+  kind: PropKind;
+  /** Facing (towards the road for furniture), radians: forward is (cos, 0, sin) in x/z. */
+  heading: number;
+  /** Its vertices: `count` from `first` (the model's whole run in the mesh). */
+  first: number;
+  count: number;
+  /** Foot of it, cm: x and z from the chunk centre, y above the mesh's base. */
+  xCm: number;
+  zCm: number;
+  yCm: number;
+  heightCm: number;
+  /** Trunk or pole radius, cm. */
+  radiusCm: number;
+}
 
 export interface BuildingMesh {
   /** Vertex positions in cm: x and z relative to the chunk centre, y above `baseCm`. */
@@ -217,6 +248,8 @@ export interface BuildingMesh {
    * group t is indices from[t] to from[t + 1]; from[0] ends the rest.
    */
   groups?: { side: number; from: Uint32Array };
+  /** Things a car can knock down, baked into this mesh. */
+  props?: PropRecord[];
 }
 
 const zig = (d: number) => ((d << 1) ^ (d >> 31)) >>> 0;
@@ -231,13 +264,14 @@ export function encodeBuildings(m: BuildingMesh): Uint8Array {
   const split = m.nearOnly !== undefined;
   const fine = m.fineFrom !== undefined;
   const grouped = !!m.groups;
+  const props = m.props?.length ? m.props : null;
   const size = BUILDINGS_HEADER + n * 6 + n * 6 + (layered ? n : 0) + (detailed ? n * 6 : 0) + (m.indices.length + m.colliderIndices.length) * isz +
-    (split ? 4 : 0) + (fine ? 4 : 0) + (grouped ? 2 + m.groups!.from.length * 4 : 0);
+    (split ? 4 : 0) + (fine ? 4 : 0) + (grouped ? 2 + m.groups!.from.length * 4 : 0) + (props ? 4 + props.length * PROP_BYTES : 0);
   const out = new Uint8Array(size);
   const view = new DataView(out.buffer);
   view.setUint32(0, BUILDINGS_MAGIC, true);
   view.setUint16(4, BUILDINGS_VERSION, true);
-  view.setUint16(6, (wide ? 1 : 0) | (layered ? 2 : 0) | (detailed ? 4 : 0) | (split ? 8 : 0) | (fine ? 16 : 0) | (grouped ? 32 : 0), true);
+  view.setUint16(6, (wide ? 1 : 0) | (layered ? 2 : 0) | (detailed ? 4 : 0) | (split ? 8 : 0) | (fine ? 16 : 0) | (grouped ? 32 : 0) | (props ? 64 : 0), true);
   view.setInt32(8, m.baseCm, true);
   view.setUint32(12, n, true);
   view.setUint32(16, m.indices.length, true);
@@ -307,6 +341,23 @@ export function encodeBuildings(m: BuildingMesh): Uint8Array {
       o += 4;
     }
   }
+  if (props) {
+    view.setUint32(o, props.length, true);
+    o += 4;
+    for (const p of props) {
+      if (p.first + p.count > n || p.count > 0xffff) throw new Error('encodeBuildings: prop vertices out of range');
+      view.setUint8(o, PROP_KINDS.indexOf(p.kind));
+      view.setUint8(o + 1, Math.round((p.heading / (2 * Math.PI)) * 256) & 0xff);
+      view.setUint16(o + 2, p.count, true);
+      view.setUint32(o + 4, p.first, true);
+      view.setInt16(o + 8, p.xCm, true);
+      view.setInt16(o + 10, p.zCm, true);
+      view.setUint16(o + 12, Math.max(0, Math.min(0xffff, p.yCm)), true);
+      view.setUint16(o + 14, Math.min(0xffff, p.heightCm), true);
+      view.setUint8(o + 16, Math.min(255, p.radiusCm));
+      o += PROP_BYTES;
+    }
+  }
   return out;
 }
 
@@ -321,6 +372,7 @@ export function decodeBuildings(bytes: Uint8Array): BuildingMesh {
   const split = (flags & 8) === 8;
   const fine = (flags & 16) === 16;
   const grouped = (flags & 32) === 32;
+  const hasProps = (flags & 64) === 64;
   const baseCm = view.getInt32(8, true);
   const n = view.getUint32(12, true);
   const ni = view.getUint32(16, true);
@@ -392,7 +444,26 @@ export function decodeBuildings(bytes: Uint8Array): BuildingMesh {
     for (let t = 0; t < from.length; t++, o += 4) from[t] = view.getUint32(o, true);
     groups = { side, from };
   }
-  return { xCm: planes[0], zCm: planes[1], yCm: planes[2], baseCm, normals, colours, indices: lists[0], colliderIndices: lists[1], layers, detail, nearOnly, fineFrom, groups };
+  let props: PropRecord[] | undefined;
+  if (hasProps) {
+    const count = view.getUint32(o, true);
+    o += 4;
+    props = [];
+    for (let k = 0; k < count; k++, o += PROP_BYTES) {
+      props.push({
+        kind: PROP_KINDS[view.getUint8(o)],
+        heading: (view.getUint8(o + 1) / 256) * 2 * Math.PI,
+        count: view.getUint16(o + 2, true),
+        first: view.getUint32(o + 4, true),
+        xCm: view.getInt16(o + 8, true),
+        zCm: view.getInt16(o + 10, true),
+        yCm: view.getUint16(o + 12, true),
+        heightCm: view.getUint16(o + 14, true),
+        radiusCm: view.getUint8(o + 16),
+      });
+    }
+  }
+  return { xCm: planes[0], zCm: planes[1], yCm: planes[2], baseCm, normals, colours, indices: lists[0], colliderIndices: lists[1], layers, detail, nearOnly, fineFrom, groups, props };
 }
 
 // Ground chunk file (land use under the terrain), before deflate:

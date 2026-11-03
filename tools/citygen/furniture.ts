@@ -31,6 +31,9 @@ const JUNCTION_CLEAR = 5;
 /** Lamp, signal and shelter heights, m. */
 const LAMP_HEIGHT = 7.5;
 const SIGNAL_HEIGHT = 3.4;
+/** Each kind's height and pole radius (for its collider and how it falls), m. */
+const HEIGHTS: Record<Kind, number> = { lamp: LAMP_HEIGHT, signal: SIGNAL_HEIGHT, shelter: 2.62, stop: 2.8, bench: 0.85, bin: 1 };
+const RADII: Record<Kind, number> = { lamp: 0.12, signal: 0.12, shelter: 0, stop: 0.07, bench: 0, bin: 0.3 };
 /** Footpath strips' lift over the ground (roads.ts LEVELS.footpath), so things stand on them. */
 const FOOTPATH_LIFT = 0.05;
 
@@ -141,7 +144,8 @@ export function placeFurniture(
     const before = mb.extras.length + mb.fineIdx.length;
     // Lamps, signals and shelters are seen down a street; benches and bins only close up.
     const fine = prop.kind === 'bench' || prop.kind === 'bin';
-    mb.detail(() => MODELS[prop.kind](new Kit(mb), prop, y), fine);
+    mb.prop(prop.kind, prop.x, y, prop.z, Math.atan2(prop.fz, prop.fx), HEIGHTS[prop.kind], RADII[prop.kind], () =>
+      mb.detail(() => MODELS[prop.kind](new Kit(mb), prop, y), fine));
     counts.tris += (mb.extras.length + mb.fineIdx.length - before) / 3;
     counts[prop.kind]++;
   }

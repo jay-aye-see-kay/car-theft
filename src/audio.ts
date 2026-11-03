@@ -236,6 +236,61 @@ export class GameAudio {
     thump.stop(t + 0.32);
   }
 
+  /**
+   * Something knocked down (src/smash.ts): a clang for a lamp or signal, a
+   * crack for a tree or bench, a tinkle for a shelter's glass, a thud for a bin.
+   */
+  smash(sound: 'metal' | 'wood' | 'glass' | 'thud', strength: number): void {
+    if (!this.ctx || strength <= 0) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const s = Math.min(1, strength);
+    // The crunch of hitting it, like a small crash.
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    src.playbackRate.value = sound === 'glass' ? 1.6 : sound === 'wood' ? 0.7 : 1;
+    const filter = ctx.createBiquadFilter();
+    filter.type = sound === 'glass' ? 'highpass' : 'bandpass';
+    filter.frequency.value = sound === 'glass' ? 3000 : sound === 'wood' ? 700 : sound === 'metal' ? 1800 : 400;
+    filter.Q.value = sound === 'metal' ? 4 : 1;
+    const g = ctx.createGain();
+    const len = sound === 'glass' ? 0.6 : sound === 'wood' ? 0.45 : 0.25;
+    g.gain.setValueAtTime(0.2 + s * 0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + len);
+    src.connect(filter).connect(g).connect(this.master);
+    src.start(t, Math.random() * 1.5, len + 0.05);
+    if (sound === 'metal') {
+      // A hollow pole ringing.
+      for (const f of [420, 1130]) {
+        const o = ctx.createOscillator();
+        o.type = 'triangle';
+        o.frequency.setValueAtTime(f, t);
+        o.frequency.exponentialRampToValueAtTime(f * 0.97, t + 0.8);
+        const og = ctx.createGain();
+        og.gain.setValueAtTime(0.12 + s * 0.12, t);
+        og.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+        o.connect(og).connect(this.master);
+        o.start(t);
+        o.stop(t + 0.92);
+      }
+    } else if (sound === 'wood') {
+      // Timber giving way: a low groan under the crack.
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(110, t);
+      o.frequency.exponentialRampToValueAtTime(55, t + 0.5);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 300;
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.15 + s * 0.15, t);
+      og.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+      o.connect(lp).connect(og).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.6);
+    }
+  }
+
   /** Something hits the water: a wash of low noise, a sharp slap and a gloop. strength ~0..1. */
   splash(strength: number): void {
     if (!this.ctx) return;
