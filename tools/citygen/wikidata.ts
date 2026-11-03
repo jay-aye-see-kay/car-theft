@@ -16,7 +16,7 @@ import { CBD_BBOX } from './project.ts';
 export type WikidataFacts = { year?: number; styles?: string[] };
 
 const SPARQL = 'https://query.wikidata.org/sparql';
-const USER_AGENT = 'grand-theft-auckland-citygen/0.1 (offline map generator; https://github.com/jay-aye-see-kay/grand-theft-auckland)';
+const USER_AGENT = 'car-theft-auckland-citygen/0.1 (offline map generator; https://github.com/jay-aye-see-kay/car-theft-auckland)';
 const fileFor = (area: string) => new URL(`./data/wikidata-${area}.json`, import.meta.url);
 
 /** The committed facts for an area, keyed by QID ('Q123'); empty if never fetched. */

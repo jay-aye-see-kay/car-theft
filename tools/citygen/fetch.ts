@@ -18,7 +18,7 @@ import { loadRaster, saveRaster, type Raster, type RasterKind } from './raster.t
 export const CACHE_ROOT = fileURLToPath(new URL('../../.cache/citygen/', import.meta.url));
 
 const OSM_API = 'https://api.openstreetmap.org/api/0.6/map';
-const USER_AGENT = 'grand-theft-auckland-citygen/0.1 (offline map generator)';
+const USER_AGENT = 'car-theft-auckland-citygen/0.1 (offline map generator)';
 /** OSM tile size in micro-degrees (integer maths keeps tile edges exact). */
 const TILE_UDEG = 10_000;
 

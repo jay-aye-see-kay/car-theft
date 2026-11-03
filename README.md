@@ -1,11 +1,11 @@
-# Grand Theft Auckland
+# Car Theft: Auckland
 
 A GTA III–flavoured open-world driving game set in Auckland, running in the
 browser on phones and desktop. Three.js + Rapier physics + TypeScript + Vite.
 
 Drive, walk and boat round the real Auckland CBD, Parnell and the eastern
 waterfront, generated from OpenStreetMap and LINZ LiDAR. Spawn on Queen St at Aotea Square next to your purple '95. Plan:
-[docs/BRIEF.md](docs/BRIEF.md) and [issues](https://github.com/jay-aye-see-kay/grand-theft-auckland/issues).
+[docs/BRIEF.md](docs/BRIEF.md) and [issues](https://github.com/jay-aye-see-kay/car-theft-auckland/issues).
 
 ## Play
 

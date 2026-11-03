@@ -1,6 +1,6 @@
 {
-  "name": "Grand Theft Auckland",
-  "short_name": "GT Auckland",
+  "name": "Car Theft: Auckland",
+  "short_name": "Car Theft",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

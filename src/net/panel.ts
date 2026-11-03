@@ -164,7 +164,7 @@ export class RoomPanel {
 
   private async share(): Promise<void> {
     try {
-      await navigator.share({ title: 'Grand Theft Auckland', text: `Join my game: room ${this.room.code}`, url: this.link() });
+      await navigator.share({ title: 'Car Theft: Auckland', text: `Join my game: room ${this.room.code}`, url: this.link() });
     } catch {
       // cancelled
     }
