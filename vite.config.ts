@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import wasm from 'vite-plugin-wasm';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
   // Relative base so the build works under https://<user>.github.io/<repo>/
@@ -16,5 +17,12 @@ export default defineConfig({
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      // lab.html: the world-gen lab's fly-around viewer (tools/worldgen-lab/), its own page.
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        lab: fileURLToPath(new URL('./lab.html', import.meta.url)),
+      },
+    },
   },
 });

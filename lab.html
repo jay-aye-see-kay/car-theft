@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>World gen lab: fly around</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #bcd4e6; font: 14px/1.35 system-ui, sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; }
+      canvas { display: block; }
+      #hud { position: fixed; top: max(8px, env(safe-area-inset-top)); left: 10px; color: #fff; text-shadow: 0 1px 2px #0008; pointer-events: none; white-space: pre; }
+      #help { position: fixed; bottom: 10px; left: 10px; color: #fff; text-shadow: 0 1px 2px #0008; pointer-events: none; white-space: pre; font-size: 13px; }
+      #loading { position: fixed; inset: 0; display: grid; place-items: center; color: #234; font-size: 18px; }
+      .btns { position: fixed; right: 10px; bottom: max(14px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
+      .btns button { min-width: 64px; height: 44px; border: 0; border-radius: 10px; background: #0007; color: #fff; font: 600 14px system-ui; }
+      .btns button.on { background: #e8833acc; }
+      #stick { position: fixed; left: 24px; bottom: max(24px, env(safe-area-inset-bottom)); width: 120px; height: 120px; border-radius: 50%; background: #0003; display: none; }
+      #knob { position: absolute; left: 40px; top: 40px; width: 40px; height: 40px; border-radius: 50%; background: #fffa; }
+      body.touch #stick { display: block; }
+      body.touch #help { display: none; }
+      body:not(.touch) .touch-only { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="loading">Generating Auckland…</div>
+    <div id="hud"></div>
+    <div id="help">Click to look with the mouse (Esc frees it) · WASD move · Space / E up · Q / C down · Shift fast · wheel: speed
+G walk on the ground · B real vs generated buildings · 1–4 jump to a view</div>
+    <div id="stick"><div id="knob"></div></div>
+    <div class="btns">
+      <button id="up" class="touch-only">▲</button>
+      <button id="down" class="touch-only">▼</button>
+      <button id="walk">Walk</button>
+      <button id="real">Real</button>
+      <button id="next">View</button>
+    </div>
+    <script type="module" src="/src/lab/main.ts"></script>
+  </body>
+</html>
