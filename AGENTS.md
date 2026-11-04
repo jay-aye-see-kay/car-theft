@@ -16,6 +16,8 @@ https://cartheft.net/ (`?debug` for perf overlay and test hooks).
 npm ci
 npm run build   # tsc typecheck + vite build into dist/
 npm run sim     # headless car handling report (Node, no browser)
+npm run play -- look   # play the built game from the shell, a text command at a time (docs/AGENT-PLAYTEST.md)
+npm run playtest       # every mission on paper in Node (~2 s): passes, and time to spare, at 3 paces
 npm run smoke   # after build: core checks in headless Chromium (~30 s)
 npm run smoke:full   # every area (a few min); `npm run smoke -- --only=harbour,fly`
 npm run dev     # dev server with --host, for phones on the LAN
@@ -181,6 +183,15 @@ get a check in an area under `scripts/smoke/areas/` (core ones only if quick).
   Parks: `ground.ts` (land use, park paths, canopy cover: shade near, canopy tint far), `trees.ts` (OSM trees plus
   LiDAR treetops on green ground and tree-shaped ones over footpaths; each a prop, see `src/smash.ts`), `barriers.ts` (park edges: walls, fences,
   hedges, retaining walls, and a default low hedge where a park meets a footpath).
+- **Agent playtesting** (`docs/AGENT-PLAYTEST.md`): `src/agent/` is shared by the game and Node: `autopilot.ts`
+  (`PathFollower`: pure pursuit on a polyline, slows for bends, brakes for people and cars in its path, backs out
+  when stuck; `npm run sim:pilot` runs it on the real car), `pilot.ts` (`Pilot`: drives or walks you through `Input`,
+  routes by road in the lane, `routePath`), `policy.ts` (`MissionPolicy`: what a literal player does next in a
+  mission), `journal.ts` (what happened, a line each, with where). `?debug`: `__game.agent(r)` (one rounded look),
+  `pilot(goal | null)`, `pilotState()`, `journal()`. `scripts/agent/`: `daemon.ts` (headless Chromium kept warm on
+  `dist/`, text commands over localhost:4380), `play.ts` (the CLI: starts the daemon, `stop`), `commands.ts` (`look`,
+  `go`, `play <mission>`, `mapshot`...), `ascii.ts` (text map and map picture from map.png and the road graph),
+  `paper.ts` (`npm run playtest`: mission scripts against a ghost on the road graph, no browser). Smoke: `agent.mjs`.
 - `tools/snapshot/` (#46): every generator input frozen at a date. `sources.ts` lists them, `<id>.json` (committed)
   pins each by sha256, files live in `.snapshot/<id>/` and the public R2 mirror `data.cartheft.net/<id>/` (bucket
   `cartheft-data`, upload from a laptop with wrangler). `files.ts` `snapshotFile(path)` is the only way generators read
