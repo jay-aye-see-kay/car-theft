@@ -160,6 +160,11 @@ for wid, (refs, t) in ways.items():
             road_lines.append(LineString(pts)); road_w.append(WIDTH.get(cls(hw), 7))
 
 
+SEGS = [LineString(l.coords[k:k + 2]) for l in road_lines for k in range(len(l.coords) - 1)]
+SEG_TREE = STRtree(SEGS)
+ROAD_TREE = STRtree(road_lines)
+
+
 def draw_roads(img, scale_m_per_px, x0=X0, z0=Z0, width=2, col=(255, 255, 255)):
     d = ImageDraw.Draw(img)
     for l in road_lines:
@@ -198,7 +203,7 @@ def blocks_in(area):
         if not f.within(area.buffer(1)):
             continue
         # Shrink by half the road plus a footpath: what's left is buildable.
-        near = [l.buffer(w / 2 + 3, cap_style='flat') for l, w in zip(road_lines, road_w) if l.intersects(f.buffer(20))]
+        near = [road_lines[k].buffer(road_w[k] / 2 + 3, cap_style='flat') for k in ROAD_TREE.query(f.buffer(20))]
         b = f.difference(unary_union(near)) if near else f
         for g in getattr(b, 'geoms', [b]):
             if g.area > 150 and g.geom_type == 'Polygon':
@@ -312,13 +317,13 @@ def wfc(lots, nbrs, corner, block_of, district, real_h):
 
 def lots_for(area, name):
     blocks = blocks_in(area)
-    streets = unary_union([l for l in road_lines if l.intersects(area.buffer(50))]).buffer(14)
     lots, block_of, district = [], [], []
     for bi, b in enumerate(blocks):
         dname = district_at(*b.centroid.coords[0])
         if dname in ('park', 'sea'):
             continue
         out = []
+        streets = unary_union([road_lines[k] for k in ROAD_TREE.query(b.buffer(16))]).buffer(14)
         street_edge = b.exterior.intersection(streets) if b.exterior.intersects(streets) else b.exterior
         split(b, LOT_W[dname], LOT_D[dname], street_edge, out)
         if not out:
@@ -333,15 +338,11 @@ def lots_for(area, name):
     # Corners: lots touching streets on two sides that point different ways.
     corner = []
     for p in lots:
-        ring = p.buffer(16).exterior
         dirs = []
-        for l in road_lines:
-            if l.distance(p) < 14:
-                for k in range(len(l.coords) - 1):
-                    seg = LineString(l.coords[k:k + 2])
-                    if seg.distance(p) < 14:
-                        (ax, az), (bx, bz) = seg.coords
-                        dirs.append(math.atan2(bz - az, bx - ax) % math.pi)
+        for k in SEG_TREE.query(p.buffer(14)):
+            (ax, az), (bx, bz) = SEGS[k].coords
+            if SEGS[k].distance(p) < 14:
+                dirs.append(math.atan2(bz - az, bx - ax) % math.pi)
         corner.append(any(min(abs(a - b), math.pi - abs(a - b)) > 0.6 for a in dirs for b in dirs))
     real_h = []
     for p in lots:
@@ -401,47 +402,48 @@ def render(area, name, seed=7, px=1.0):
     return colours, used
 
 
-AREAS = {
-    'lots-kroad': box(-1150, 1350, -400, 1800),      # K Rd: main street on the ridge, villas and motorway south
-    'lots-cbd': box(-750, 150, 0, 600),              # towers round Sky Tower down to Queen St
-}
-allcols = {}
-for n, a in AREAS.items():
-    cols, used = render(a, n)
-    allcols.update(cols)
-# Legend of tiles.
-items = sorted(allcols.items())
-leg = Image.new('RGB', (180, 18 * len(items) + 8), (255, 255, 255))
-d = ImageDraw.Draw(leg)
-for k, (n, c) in enumerate(items):
-    d.rectangle((6, 6 + k * 18, 18, 18 + k * 18), fill=c); d.text((24, 6 + k * 18), n, fill=(0, 0, 0))
-leg.save(f'{OUT}/lots-legend.png')
+if __name__ == '__main__':
+    AREAS = {
+        'lots-kroad': box(-1150, 1350, -400, 1800),      # K Rd: main street on the ridge, villas and motorway south
+        'lots-cbd': box(-750, 150, 0, 600),              # towers round Sky Tower down to Queen St
+    }
+    allcols = {}
+    for n, a in AREAS.items():
+        cols, used = render(a, n)
+        allcols.update(cols)
+    # Legend of tiles.
+    items = sorted(allcols.items())
+    leg = Image.new('RGB', (180, 18 * len(items) + 8), (255, 255, 255))
+    d = ImageDraw.Draw(leg)
+    for k, (n, c) in enumerate(items):
+        d.rectangle((6, 6 + k * 18, 18, 18 + k * 18), fill=c); d.text((24, 6 + k * 18), n, fill=(0, 0, 0))
+    leg.save(f'{OUT}/lots-legend.png')
 
-# For the 3D preview (preview.mjs): lots in one window, with their tile, storeys and the ground under them.
-PREVIEW = box(-700, 1330, 100, 1830)
-cache = os.path.join(ROOT, '.cache/worldgen-lab')
-T = np.load(f'{cache}/terrain.npz')
-random.seed(11)
-_, plots, pn, pc, pb, pd, ph = lots_for(PREVIEW, 'preview')
-pfix, _ = wfc(plots, pn, pc, pb, pd, ph)
-spec = {t[0]: t for ts in TILES.values() for t in ts}
-out = []
-for i, p in enumerate(plots):
-    if not p.intersects(PREVIEW):
-        continue
-    p = p.intersection(PREVIEW)
-    if p.geom_type != 'Polygon' or p.area < 20:
-        continue
-    name, _, (s0, s1), col = spec[pfix[i]]
-    storeys = random.randint(s0, s1)
-    if name == 'tower':
-        storeys = max(storeys, min(int(ph[i] / 3.5), 50))
-    x0, z0, x1, z1 = p.bounds
-    win = T['plinths'][int((z0 - Z0) / CELL):int((z1 - Z0) / CELL) + 1, int((x0 - X0) / CELL):int((x1 - X0) / CELL) + 1]
-    inset = p.buffer(-1.0 if name not in ('villa', 'bungalow', 'dairy') else -3.0)
-    if inset.is_empty or inset.geom_type != 'Polygon':
-        continue
-    out.append(dict(kind=name, colour=col, storeys=storeys, base=float(np.median(win)), foot=float(win.min()),
-                    pts=[[round(x, 2), round(z, 2)] for x, z in inset.exterior.coords[:-1]]))
-json.dump(dict(bounds=PREVIEW.bounds, lots=out), open(f'{cache}/lots.json', 'w'))
-print('preview lots', len(out))
+    # For the 3D preview (preview.mjs): lots in one window, with their tile, storeys and the ground under them.
+    PREVIEW = box(-700, 1330, 100, 1830)
+    cache = os.path.join(ROOT, '.cache/worldgen-lab')
+    T = np.load(f'{cache}/terrain.npz')
+    random.seed(11)
+    _, plots, pn, pc, pb, pd, ph = lots_for(PREVIEW, 'preview')
+    pfix, _ = wfc(plots, pn, pc, pb, pd, ph)
+    spec = {t[0]: t for ts in TILES.values() for t in ts}
+    out = []
+    for i, p in enumerate(plots):
+        if not p.intersects(PREVIEW):
+            continue
+        p = p.intersection(PREVIEW)
+        if p.geom_type != 'Polygon' or p.area < 20:
+            continue
+        name, _, (s0, s1), col = spec[pfix[i]]
+        storeys = random.randint(s0, s1)
+        if name == 'tower':
+            storeys = max(storeys, min(int(ph[i] / 3.5), 50))
+        x0, z0, x1, z1 = p.bounds
+        win = T['plinths'][int((z0 - Z0) / CELL):int((z1 - Z0) / CELL) + 1, int((x0 - X0) / CELL):int((x1 - X0) / CELL) + 1]
+        inset = p.buffer(-1.0 if name not in ('villa', 'bungalow', 'dairy') else -3.0)
+        if inset.is_empty or inset.geom_type != 'Polygon':
+            continue
+        out.append(dict(kind=name, colour=col, storeys=storeys, base=float(np.median(win)), foot=float(win.min()),
+                        pts=[[round(x, 2), round(z, 2)] for x, z in inset.exterior.coords[:-1]]))
+    json.dump(dict(bounds=PREVIEW.bounds, lots=out), open(f'{cache}/lots.json', 'w'))
+    print('preview lots', len(out))

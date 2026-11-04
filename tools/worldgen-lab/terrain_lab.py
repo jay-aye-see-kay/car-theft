@@ -196,6 +196,7 @@ road_s = np.zeros((NZ, NX), np.float32)
 road_side = np.zeros((NZ, NX), np.int8)
 carriage = np.zeros((NZ, NX), bool)
 deck = np.zeros((NZ, NX), bool)
+deck_h = np.full((NZ, NX), np.nan, np.float32)
 gr = np.arange(NZ)[:, None] * CELL + Z0 + CELL / 2
 gc = np.arange(NX)[None, :] * CELL + X0 + CELL / 2
 
@@ -213,7 +214,9 @@ def paint_segment(a, b, ha, hb, half, rank, is_bridge, ei=-1, s0=0.0):
     t = np.clip(((X - ax) * dx + (Z - az) * dz) / L2, 0, 1)
     d = np.hypot(X - (ax + t * dx), Z - (az + t * dz))
     if is_bridge:
+        on = d <= half + FOOTPATH
         deck[r0:r1, c0:c1] |= d <= half
+        deck_h[r0:r1, c0:c1][on] = (ha + (hb - ha) * t)[on]
         return
     h = ha + (hb - ha) * t
     win = (d <= half + FOOTPATH) & ((rank > road_rank[r0:r1, c0:c1]) | ((rank == road_rank[r0:r1, c0:c1]) & (d < road_d[r0:r1, c0:c1])))
@@ -385,4 +388,7 @@ for e in edges:
         ch = e['chain']
         decks.append(dict(width=e['width'], pts=[[round(float(V[v][0]), 2), round(float(H[v]), 2), round(float(V[v][1]), 2)] for v in ch]))
 json.dump(decks, open(f'{cache}/decks.json', 'w'))
+np.save(f'{cache}/deck_h.npy', deck_h)
+json.dump([dict(width=e['width'], bridge=e['bridge'], cls=e['cls'], pts=[[float(V[v][0]), float(V[v][1])] for v in e['chain']])
+           for e in edges], open(f'{cache}/edges.json', 'w'))
 print('saved', cache)

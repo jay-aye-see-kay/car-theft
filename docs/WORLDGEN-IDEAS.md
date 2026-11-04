@@ -268,6 +268,16 @@ bump for the bridge kit.
    each week)? Rooms only need everyone to share the seed.
 6. **Kerbs**: real 15 cm steps now that roads are planar, or keep flush?
 
+## Fly around it
+
+`lab.html` (on the branch preview, `/lab.html`) is the whole map from these
+prototypes in 3D: designed ground, level roads with kerbs and markings, kit
+bridges, 8,100 generated buildings (B swaps in the real footprints at LiDAR
+heights for comparison) and a stand-in Sky Tower. Fly or walk (G); 1–4 jump
+to views (harbour, on Grafton Bridge, Queen St, over the Domain). Touch: stick
+bottom left, drag to look, ▲▼ to climb. No collisions with buildings: it's for
+looking.
+
 ## Running the lab
 
 Exploration code: Python (numpy, scipy, shapely, pyproj, pillow, networkx)
@@ -279,4 +289,5 @@ node --experimental-strip-types tools/worldgen-lab/diagnose.ts   # today's cross
 python3 tools/worldgen-lab/terrain_lab.py     # ideas 1-2, writes .cache/worldgen-lab/
 python3 tools/worldgen-lab/districts_lab.py   # ideas 4-5
 node tools/worldgen-lab/preview.mjs           # the 3D views
+python3 tools/worldgen-lab/export_world.py    # the whole map for lab.html, into public/lab/
 ```
