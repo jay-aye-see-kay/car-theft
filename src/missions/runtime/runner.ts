@@ -60,6 +60,8 @@ export interface PropView {
   draw: number;
   /** Carried by this player id: a guest draws it over its own head from its own pose. */
   carrier: number | null;
+  /** Counts only for someone on foot (true) or driving (false); either if unset. */
+  onFoot?: boolean;
 }
 
 interface PropState {
@@ -446,6 +448,11 @@ export class MissionRunner {
   }
 
   /** ?debug: the view plus how the last mission went and everything said. */
+  /** Everything said since the reset, oldest first (?debug: the agents' journal). */
+  get spoken(): readonly string[] {
+    return this.said;
+  }
+
   debugState() {
     return { ...this.view(), last: this.last, said: [...this.said], missions: this.missions.map((m) => ({ id: m.id, title: m.title, start: this.startOf(m), min: m.players?.min ?? 1 })) };
   }
@@ -455,7 +462,7 @@ export class MissionRunner {
     return run.props.filter((p) => !p.removed).map((p) => {
       const c = p.carrier === null ? null : everyone.find((q) => q.id === p.carrier);
       const at = c ? this.carriedAt(c) : { x: p.x, y: null, z: p.z };
-      return { ...at, style: p.style, colour: p.colour, radius: p.radius, label: p.label, draw: p.draw, carrier: c ? c.id : null };
+      return { ...at, style: p.style, colour: p.colour, radius: p.radius, label: p.label, draw: p.draw, carrier: c ? c.id : null, onFoot: p.onFoot };
     });
   }
 

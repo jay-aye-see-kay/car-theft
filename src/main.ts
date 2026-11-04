@@ -43,6 +43,8 @@ import { FullMap } from './map/full-map.ts';
 import { Minimap } from './map/minimap.ts';
 import { Navigator } from './map/navigator.ts';
 import { Smash, SMASH, toughness, type SmashEvent } from './smash.ts';
+import { Journal } from './agent/journal.ts';
+import { Pilot, type PilotGoal } from './agent/pilot.ts';
 import './style.css';
 
 const FIXED_DT = 1 / 60;
@@ -973,6 +975,30 @@ async function main() {
   let tickClock = 0;
   /** ?debug lastImpact(): the hardest knock the driven car's had. */
   let biggestImpact = 0;
+  // ?debug, for agents and playtest bots (scripts/agent): an autopilot that
+  // drives through Input like a player's hands, and a journal of what happened.
+  const pilot = new Pilot(map.roads ?? null, () => {
+    const v = driving ?? boating;
+    const t = v ? v.body.translation() : player.body.translation();
+    const heading = driving ? _euler.setFromQuaternion(driving.rotation(), 'YXZ').y : boating ? yawOf(boating.object.quaternion) : player.heading;
+    return { mode: driving ? 'car' : boating ? 'boat' : 'foot', x: t.x, z: t.z, heading, speed: v ? v.forwardSpeed() : player.speed };
+  }, () => chase.yaw, (x, z) => {
+    // People and other cars within 40 m: what a careful driver brakes for.
+    const near = (p: { x: number; z: number }) => Math.abs(p.x - x) < 40 && Math.abs(p.z - z) < 40;
+    const out = (peds?.list ?? []).filter((p) => near(p) && p.state !== 'fly').map((p) => ({ x: p.x, z: p.z, r: 0.4 }));
+    for (const { car, frozen } of cars) {
+      if (car === driving || frozen || town?.idle(car)) continue;
+      const t = car.body.translation();
+      // Half its width: what matters is whether it's beside our line or on it.
+      if (near(t)) out.push({ x: t.x, z: t.z, r: 0.9 });
+    }
+    return out;
+  });
+  const journal = new Journal();
+  /** People you've hit since the reset (peds.stats counts traffic's too). */
+  let playerHits = 0;
+  /** What car `i` is, for agents: the purple one, a parked one, or one of the town's. */
+  const carKind = (i: number) => (i === 0 ? 'purple' : i < fixedCars ? 'parked' : (town?.debug().find((t) => t.index === i - fixedCars)?.pool ?? 'town'));
 
   /**
    * One frame of game logic: input, physics steps for `frameDt` of game
@@ -982,6 +1008,7 @@ async function main() {
   const frame = (frameDt: number, alpha?: number) => {
     clock += frameDt;
     input.update();
+    if (debug && started) pilot.control(input, frameDt);
     if (!started) input.clearPresses();
     // Game time, not wall time: a stalled frame shouldn't spoil a code.
     if (started && !driving && !boating && flyCode.feed(input.moveX, input.moveY, clock)) setFlying(!player.flying);
@@ -1292,6 +1319,7 @@ async function main() {
         if (e.kind === 'hit') {
           audio.impact(Math.min(0.6, 0.15 + e.speed / 30) * (e.byPlayer ? 1 : Math.max(0, near)));
           if (e.byPlayer) chase.shake(0.25);
+          if (e.byPlayer) playerHits++;
         } else if (e.kind === 'bounce' && near > 0) audio.impact(e.strength * 0.2 * near);
         else if (e.kind === 'bark') audio.bark(near, e.pitch);
       }
@@ -1329,6 +1357,19 @@ async function main() {
         const st = missions.share();
         if (st) room.sendMission(st);
       }
+    }
+    if (debug) {
+      const mv = missions?.view();
+      journal.tick({
+        clock, ...(({ x, z }) => ({ x, z }))((driving ?? boating)?.body.translation() ?? player.body.translation()),
+        mode: driving ? 'car' : boating ? 'boat' : 'foot', car: driving ? cars.findIndex((c) => c.car === driving) : -1,
+        carKind: () => carKind(cars.findIndex((c) => c.car === driving)), speedKmh: Math.abs((driving ?? boating)?.forwardSpeed() ?? player.speed) * 3.6,
+        crash, heat: cops?.level ?? 0, seen: cops?.seen ?? false, caught: !!cops?.scene, dizzy: dizzy.active, dizzyCause: dizzy.cause ?? '',
+        flat: (driving?.flat ?? 0) > 0, soaked: playerSoaked !== null || (!!driving && cars.some((c) => c.car === driving && c.soaked !== null)),
+        pedHits: playerHits, pedBumps: peds?.stats.bumps ?? 0, smashed: smash?.tally ?? {}, tickets: cops?.tickets ?? 0,
+        offences: cops?.stats.log ?? [], mission: mv?.active ?? null, banner: mv?.banner ? `${mv.banner.title}${mv.banner.text ? ` (${mv.banner.text})` : ''}` : null,
+        objective: mv?.objective ?? '', said: missions?.spoken ?? [], pilot: pilot.view().status,
+      });
     }
     // On foot the camera is always close; this only hides them from far debug views.
     player.object.visible = !driving && !boating && player.position.distanceTo(camera.position) < CAR_DETAIL;
@@ -1929,6 +1970,63 @@ async function main() {
         biggestImpact = 0;
         return v;
       },
+      /**
+       * The autopilot (src/agent/pilot.ts): head for `to` ([x, z]) by road or
+       * direct, at up to `kmh`, driving or walking as you are; null lets go.
+       */
+      pilot: (goal: PilotGoal | null) => pilot.set(goal),
+      pilotState: () => pilot.view(),
+      /** What's happened since the last call, one line each (src/agent/journal.ts). */
+      journal: () => journal.take(),
+      /**
+       * Everything an agent needs to see in one call, rounded: you, the street,
+       * the cops, the mission, the autopilot, and what's within `r` m.
+       */
+      agent: (r = 40) => {
+        const r1 = (v: number) => Math.round(v * 10) / 10;
+        const v = driving ?? boating;
+        const at = v ? v.body.translation() : player.body.translation();
+        const heading = driving ? _euler.setFromQuaternion(driving.rotation(), 'YXZ').y : boating ? yawOf(boating.object.quaternion) : player.heading;
+        const road = map.roads?.nearest(at.x, at.z, { within: 40, open: false });
+        const mv = missions?.view();
+        const near = (x: number, z: number) => Math.hypot(x - at.x, z - at.z) <= r;
+        const drivingIndex = driving ? cars.findIndex((c) => c.car === driving) : -1;
+        const townCars = new Map((town?.debug() ?? []).map((t) => [t.index + fixedCars, t]));
+        const copCars = new Set((cops?.debug().cars ?? []).map((c) => `${Math.round(c.pos[0])},${Math.round(c.pos[2])}`));
+        const carList = cars.flatMap(({ car }, i) => {
+          if (i === drivingIndex || (i >= fixedCars && !townCars.has(i))) return [];
+          const p = car.body.translation();
+          if (!near(p.x, p.z)) return [];
+          const t = townCars.get(i);
+          const kind = i === 0 ? 'purple' : t ? (t.pool === 'patrol' ? (copCars.has(`${Math.round(p.x)},${Math.round(p.z)}`) ? 'cop-chasing' : 'police') : t.kind === 'driving' ? 'traffic' : 'parked') : 'parked';
+          return [{ i, kind, x: r1(p.x), z: r1(p.z), heading: r1(_euler.setFromQuaternion(car.rotation(), 'YXZ').y), kmh: Math.round(Math.abs(car.forwardSpeed()) * 3.6), upright: !car.isUpsideDown() }];
+        });
+        return {
+          t: r1(clock), mode: driving ? 'car' : boating ? 'boat' : 'foot', car: drivingIndex,
+          pos: [r1(at.x), r1(at.y), r1(at.z)], heading: Math.round(heading * 100) / 100,
+          kmh: Math.round(Math.abs(v ? v.forwardSpeed() : player.speed) * 3.6),
+          street: road ? { name: road.edge.name || road.edge.highway, off: r1(road.dist - road.edge.width / 2) } : null,
+          surface: map.surfaceAt?.(at.x, at.z) ?? null,
+          nearCar: !driving && !boating ? cars.findIndex((c) => c.car === nearestCar()) : -1,
+          nearBoat: !driving && !boating && !!nearestBoat(),
+          heat: cops?.level ?? 0, seen: cops?.seen ?? false, caught: !!cops?.scene, dizzy: dizzy.active, flat: (driving?.flat ?? 0) > 0,
+          paused,
+          mission: mv && {
+            active: mv.active, objective: mv.objective, subtitle: mv.subtitle, banner: mv.banner && `${mv.banner.kind}: ${mv.banner.title}${mv.banner.text ? ` (${mv.banner.text})` : ''}`,
+            clock: mv.clock && { s: Math.round(mv.clock.seconds), down: mv.clock.down },
+            target: mv.target && { ...mv.target, x: r1(mv.target.x), z: r1(mv.target.z) }, targets: mv.targets.length,
+            props: mv.props.map((p) => ({ x: r1(p.x), z: r1(p.z), style: p.style, label: p.label, radius: p.radius, onFoot: p.onFoot, carried: p.carrier !== null })),
+            board: mv.board, hint: mv.hint, nearest: mv.nearest && { ...mv.nearest, x: r1(mv.nearest.x), z: r1(mv.nearest.z) },
+          },
+          pilot: pilot.view(),
+          cars: carList,
+          peds: (peds?.list ?? []).filter((p) => near(p.x, p.z)).map((p) => ({ x: r1(p.x), z: r1(p.z), state: p.state, role: p.role, says: p.saysFor > 0 ? p.says : '' })),
+          boats: boats.flatMap((b, i) => {
+            const p = b.object.position;
+            return b !== boating && near(p.x, p.z) ? [{ i, kind: b.kind, x: r1(p.x), z: r1(p.z) }] : [];
+          }),
+        };
+      },
       step,
       /** Manual mode: draw a frame (for a screenshot); resolves once it's on screen. */
       draw: async () => {
@@ -1984,6 +2082,7 @@ async function main() {
         smash?.reset();
         smashed.length = 0;
         carSpeeds.reset();
+        pilot.set(null);
         hitPlayerAt.fill(-Infinity);
         eased.x = eased.z = eased.steer = 0;
         tickClock = 0;
@@ -1991,6 +2090,8 @@ async function main() {
         input.zoom = 1;
         chase.snap(map.spawn.heading);
         await step(2); // and stays paused: what follows is stepped from here
+        journal.reset();
+        playerHits = 0;
       },
       /** The map: whether the minimap's up and the full map open, the waypoint, where you're headed and the route there. */
       mapState: () => {
