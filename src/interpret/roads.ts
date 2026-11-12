@@ -253,7 +253,9 @@ export function interpretRoads(
     const len = length.get(c)!;
     const real = (id: number) => (armCount.get(id) ?? 0) >= 3;
     const sameLevel = c.sections[0].level === c.sections[c.sections.length - 1].level;
-    if (len < opts.clusterDist && c.a !== c.b && real(c.a) && real(c.b) && sameLevel) {
+    // A road under a metre long is a mapping artefact whatever it joins.
+    if (len < 1 && c.a === c.b) continue;
+    if (c.a !== c.b && (len < 1 || (len < opts.clusterDist && real(c.a) && real(c.b) && sameLevel))) {
       const [ra, rb] = [find(c.a), find(c.b)];
       if (ra !== rb) parent.set(ra, rb);
       bump('junctions.shortLinksCollapsed');

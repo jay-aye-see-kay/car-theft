@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import type { Heightfield } from '../model/load.ts';
 import type { Building } from '../model/types.ts';
+import { hashOf, styleFor } from './facade.ts';
 
 export interface MassingOptions {
   /** 'grey' is neutral; 'toy' picks from a small saturated palette, ignoring real colours. */
@@ -11,23 +12,15 @@ export interface MassingOptions {
   hillScale: number;
 }
 
-const TOY = [0xf2e3c6, 0xe8b08a, 0xd9785a, 0x8fbfb0, 0xe9c46a, 0xf0c9c0, 0x9db4d6, 0xc9d6a3, 0xf7f1e3];
-const TOY_TOWER = [0x8fc1d9, 0x7fb0c9, 0xa9cfe0, 0x9bd0c4, 0xb9c6e0];
-
-function hashOf(id: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 16777619) >>> 0;
-  return hash;
-}
-
 function tone(b: Building, palette: MassingOptions['palette']): THREE.Color {
   // A stable pseudo-random choice per building, from its id.
   const hash = hashOf(b.id);
   const r = (hash % 1000) / 1000;
   const c = new THREE.Color();
   if (palette === 'toy') {
-    const set = b.h > 35 ? TOY_TOWER : TOY;
-    return c.setHex(set[hash % set.length]).offsetHSL(0, 0, (r - 0.5) * 0.06);
+    // The same wall colour the facade grammar will pick, so a building keeps its colour as it gains detail.
+    const walls = styleFor(b).walls;
+    return c.setHex(walls[hash % walls.length]);
   }
   if (b.h > 40) return c.setHSL(0.58, 0.14, 0.62 + r * 0.14);
   if (b.kind === 'university' || b.kind === 'church' || b.kind === 'cathedral') return c.setHSL(0.07, 0.3, 0.6 + r * 0.1);
@@ -55,7 +48,8 @@ export function buildMassing(buildings: Building[], ground: Heightfield, opts: M
     const floor = b.ground * opts.hillScale;
     const top = floor + b.h;
     const c = tone(b, opts.palette);
-    const roof = c.clone().multiplyScalar(opts.palette === 'toy' ? 0.9 : 0.82);
+    const roofs = styleFor(b).roof;
+    const roof = opts.palette === 'toy' ? new THREE.Color(roofs[(hashOf(b.id) >>> 4) % roofs.length]) : c.clone().multiplyScalar(0.82);
     const seed = (hashOf(b.id) % 997) / 997;
     for (let i = 0; i < n; i++) {
       const [ax, ay] = b.ring[i];

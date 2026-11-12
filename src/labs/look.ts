@@ -7,11 +7,13 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import '../ui/lab.css';
 import { toNztm } from '../geo/nztm.ts';
 import { buildMassing } from '../gen/buildings.ts';
+import { buildFacades } from '../gen/facade.ts';
 import { solveJunctions } from '../gen/junctions.ts';
 import { buildRoadMeshes } from '../gen/roadMesh.ts';
 import { occupancy, scatterTrees } from '../gen/scatter.ts';
 import { buildTerrainGeometry, gradeTerrain, paintGround } from '../gen/terrain.ts';
 import { DEFAULT_PARAMS, buildTrack, solveElevations } from '../gen/tracks.ts';
+import { centroid } from '../geo/poly.ts';
 import { type Heightfield, loadTile } from '../model/load.ts';
 
 interface Look {
@@ -72,13 +74,19 @@ const LOOKS: Record<string, Look> = {
 
 const canvas = document.getElementById('stage') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
-hud.innerHTML = `<a class="back" href="../../">← labs</a><h1>Look study</h1><p>Loading…</p>`;
+// The buildings lab is this page with the facade grammar switched on and a street-level start.
+const lab = document.body.dataset.lab === 'buildings' ? 'buildings' : 'look';
+const TITLE = lab === 'buildings' ? 'Building grammar' : 'Look study';
+hud.innerHTML = `<a class="back" href="../../">← labs</a><h1>${TITLE}</h1><p>Loading…</p>`;
 
 const query = new URLSearchParams(location.search);
 const state = {
   look: query.get('look') && query.get('look')! in LOOKS ? query.get('look')! : 'Toy city',
   hillScale: Number(query.get('hills')) || 1,
   driving: false,
+  /** Build real facades for buildings near the view; the rest stay as boxes with shader windows. */
+  detail: lab === 'buildings',
+  detailRadius: 260,
 };
 const look: Look = { ...LOOKS[state.look] };
 
@@ -145,11 +153,12 @@ const mats = {
   terrain: new THREE.MeshToonMaterial({ map: groundPaint }),
   surface: new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide }),
   buildings: new THREE.MeshToonMaterial({ vertexColors: true }),
+  facades: new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide }),
   trees: new THREE.MeshToonMaterial({ vertexColors: true }),
   car: new THREE.MeshToonMaterial({ vertexColors: true }),
   markings: new THREE.MeshBasicMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
 };
-const toons = [mats.terrain, mats.surface, mats.buildings, mats.trees, mats.car];
+const toons = [mats.terrain, mats.surface, mats.buildings, mats.facades, mats.trees, mats.car];
 
 // Windows are drawn by the shader from the wall's bay grid: bays across, floors up. The grid
 // comes from the building's real width and height, which is what an interior would also use.
@@ -187,6 +196,17 @@ mats.buildings.onBeforeCompile = (shader) => {
     .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(1.0, 0.74, 0.38) * litWindow * uGlow;');
 };
 
+// Built facades carry a per-vertex `glow` so the same windows can light up at dusk.
+mats.facades.onBeforeCompile = (shader) => {
+  Object.assign(shader.uniforms, facade);
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute float glow;\nvarying float vGlow;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlow = glow;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying float vGlow;\nuniform float uGlow;')
+    .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(1.0, 0.74, 0.38) * vGlow * uGlow;');
+};
+
 // One low-poly tree, instanced for every scattered position.
 function treeGeometry(): THREE.BufferGeometry {
   const paint = (g: THREE.BufferGeometry, c: number): THREE.BufferGeometry => {
@@ -207,13 +227,40 @@ const treeShape = treeGeometry();
 const world = new THREE.Group();
 scene.add(world);
 let surfaceAt: Heightfield = ground;
+let land: Heightfield = ground;
+let nearRoad: (x: number, y: number) => boolean = () => false;
+const built = new THREE.Group();
+scene.add(built);
+const focus = new THREE.Vector3(Infinity, 0, 0);
+let detailCount = 0;
+const centres = model.buildings.map((b) => centroid(b.ring));
+
+/** Splits buildings into near (full facades) and far (boxes), around what the camera is looking at. */
+function rebuildBuildings(): void {
+  for (const child of built.children) (child as THREE.Mesh).geometry.dispose();
+  built.clear();
+  focus.copy(controls.target);
+  const near = (i: number) => state.detail && Math.hypot(centres[i][0] - focus.x, centres[i][1] + focus.z) < state.detailRadius;
+  const far = model.buildings.filter((_, i) => !near(i));
+  const close = model.buildings.filter((_, i) => near(i));
+  detailCount = close.length;
+  for (const [geometry, material] of [
+    [buildMassing(far, land, { palette: look.palette, hillScale: state.hillScale }), mats.buildings],
+    [buildFacades(close, land, { hillScale: state.hillScale, nearRoad }), mats.facades],
+  ] as const) {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = mesh.receiveShadow = true;
+    built.add(mesh);
+  }
+  renderHud();
+}
 
 function generate(): void {
   for (const child of world.children) if ((child as THREE.Mesh).geometry !== treeShape) (child as THREE.Mesh).geometry.dispose();
   world.clear();
 
   // Exaggeration happens to the input, so roads, banks and buildings all follow it.
-  const land = ground.clone();
+  land = ground.clone();
   for (let i = 0; i < land.data.length; i++) land.data[i] *= state.hillScale;
 
   const tracks = new Map(model.roads.map((r) => [r.id, buildTrack(r, DEFAULT_PARAMS)]));
@@ -222,6 +269,7 @@ function generate(): void {
   const graded = gradeTerrain(land, tracks.values(), junctions, DEFAULT_PARAMS);
   const roads = buildRoadMeshes(tracks.values(), junctions, DEFAULT_PARAMS, { tintJunctions: false });
   surfaceAt = graded;
+  nearRoad = occupancy(model, tracks.values(), 'roads');
 
   const add = (geometry: THREE.BufferGeometry, material: THREE.Material, cast: boolean, receive: boolean): THREE.Mesh => {
     const mesh = new THREE.Mesh(geometry, material);
@@ -233,7 +281,7 @@ function generate(): void {
   add(buildTerrainGeometry(graded), mats.terrain, false, true);
   add(roads.surface, mats.surface, true, true);
   add(roads.markings, mats.markings, false, false);
-  add(buildMassing(model.buildings, land, { palette: look.palette, hillScale: state.hillScale }), mats.buildings, true, true);
+  rebuildBuildings();
 
   if (look.trees) {
     const trees = scatterTrees(model, graded, occupancy(model, tracks.values()));
@@ -320,9 +368,9 @@ function applyLook(): void {
 function renderHud(): void {
   hud.innerHTML = `
     <a class="back" href="../../">← labs</a>
-    <h1>Look study</h1>
-    <p>${look.about}</p>
-    <p class="detail">Same generated tile as lab 2. ${treeCount.toLocaleString()} trees placed by land type.
+    <h1>${TITLE}</h1>
+    <p>${lab === 'buildings' ? 'Every building within reach of the view is grown from its footprint and height by one small grammar: walls, floors, bays, then windows, shopfronts, awnings and roofs. Farther ones stay as boxes on the same grid.' : look.about}</p>
+    <p class="detail">${state.detail ? `${detailCount} buildings with built facades right now. ` : ''}${treeCount.toLocaleString()} trees placed by land type.
     ${state.driving ? '<b>Driving:</b> WASD or arrows, or drag on a touch screen. Shift is faster.' : 'Drag to pan, right-drag or two fingers to orbit.'}</p>`;
 }
 
@@ -436,6 +484,7 @@ applyLook();
 generate();
 const at = query.get('at')?.split(',').map(Number);
 if (at?.length === 4 && at.every(Number.isFinite)) lookAt(at[0], at[1], at[2], at[3]);
+else if (lab === 'buildings') lookAt(-36.8578, 174.7617, 95, 75);
 else lookAt(...(PLACES[0].slice(1) as [number, number, number, number]));
 if (query.has('drive')) setDriving(true);
 renderHud();
@@ -464,6 +513,8 @@ style.add(look, 'outline', 0, 1, 0.05).name('Outlines').onChange(applyLook);
 style.add(look, 'windows', 0, 1, 0.05).name('Windows').onChange(applyLook);
 style.add(look, 'glow', 0, 2, 0.05).name('Lit windows').onChange(applyLook);
 style.add(look, 'palette', ['toy', 'grey']).name('Building colours').onChange(generate);
+style.add(state, 'detail').name('Built facades nearby').onChange(rebuildBuildings);
+style.add(state, 'detailRadius', 80, 600, 10).name('Facade reach (m)').onFinishChange(rebuildBuildings);
 style.add(look, 'trees').name('Trees').onChange(() => (generate(), renderHud()));
 style.add(state, 'hillScale', 1, 2.5, 0.1).name('Hill exaggeration').onFinishChange(generate);
 light.add(look, 'sunBearing', 0, 360, 1).name('Sun bearing');
@@ -492,6 +543,7 @@ renderer.setAnimationLoop((now: number) => {
   last = now;
   if (state.driving) stepDrive(dt);
   else controls.update();
+  if (state.detail && Math.hypot(controls.target.x - focus.x, controls.target.z - focus.z) > state.detailRadius * 0.3) rebuildBuildings();
 
   // The sun and its shadow box follow whatever the camera is looking at.
   const b = (look.sunBearing * Math.PI) / 180;

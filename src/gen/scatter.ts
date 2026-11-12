@@ -29,7 +29,7 @@ function hash(ix: number, iy: number, salt: number): number {
 }
 
 /** A 2 m raster of everything a tree must not stand on: buildings, roads and footpaths. */
-export function occupancy(model: TileModel, tracks: Iterable<Track>): (x: number, y: number) => boolean {
+export function occupancy(model: TileModel, tracks: Iterable<Track>, what: 'everything' | 'roads' = 'everything'): (x: number, y: number) => boolean {
   const cell = 2;
   const cv = document.createElement('canvas');
   cv.width = Math.ceil(model.size.x / cell);
@@ -38,7 +38,7 @@ export function occupancy(model: TileModel, tracks: Iterable<Track>): (x: number
   g.setTransform(1 / cell, 0, 0, -1 / cell, cv.width / 2, cv.height / 2);
   g.fillStyle = g.strokeStyle = '#fff';
   g.lineCap = g.lineJoin = 'round';
-  for (const b of model.buildings) {
+  for (const b of what === 'roads' ? [] : model.buildings) {
     g.beginPath();
     b.ring.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
     g.closePath();
@@ -46,7 +46,7 @@ export function occupancy(model: TileModel, tracks: Iterable<Track>): (x: number
     g.lineWidth = 3;
     g.stroke();
   }
-  for (const a of model.areas) {
+  for (const a of what === 'roads' ? [] : model.areas) {
     if (a.kind !== 'pitch' && a.kind !== 'water' && a.kind !== 'parking' && a.kind !== 'plaza') continue;
     g.beginPath();
     a.ring.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
@@ -62,7 +62,7 @@ export function occupancy(model: TileModel, tracks: Iterable<Track>): (x: number
     g.lineWidth = 2 * halfWidth(t, t.n >> 1) + 9;
     g.stroke();
   }
-  for (const p of model.paths) {
+  for (const p of what === 'roads' ? [] : model.paths) {
     g.beginPath();
     p.pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
     g.lineWidth = 4;
@@ -72,7 +72,8 @@ export function occupancy(model: TileModel, tracks: Iterable<Track>): (x: number
   return (x, y) => {
     const c = Math.floor(x / cell + cv.width / 2);
     const r = Math.floor(cv.height / 2 - y / cell);
-    return c < 0 || r < 0 || c >= cv.width || r >= cv.height || px[(r * cv.width + c) * 4] > 60;
+    if (c < 0 || r < 0 || c >= cv.width || r >= cv.height) return what === 'everything';
+    return px[(r * cv.width + c) * 4] > 60;
   };
 }
 
