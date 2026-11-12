@@ -172,7 +172,12 @@ export function buildRoadMeshes(
 
   for (const j of junctions) {
     b.polygon(j.ring, opts.tintJunctions ? STATUS_TINT[j.status] : C.junction);
+    if (j.deck) b.polygon(j.ring.map((pt) => ({ ...pt, h: pt.h - 1.5 })), C.structure);
     for (const f of j.fillets) {
+      if (f.deck && !f.footpath && f.pts.length >= 2) {
+        b.ribbon(f.pts, f.pts.map((pt) => ({ ...pt, h: pt.h - 1.5 })), C.structure);
+        b.ribbon(f.pts, f.pts.map((pt) => ({ ...pt, h: pt.h + 1.0 })), C.barrier);
+      }
       if (!f.footpath || f.pts.length < 2) continue;
       // Outward is to the right when walking the kerb anticlockwise around the junction.
       const out = f.pts.map((_, i) => {
@@ -185,11 +190,16 @@ export function buildRoadMeshes(
       const far = f.pts.map((pt, i) => ({ x: pt.x + out[i].x * p.footpathWidth, y: pt.y + out[i].y * p.footpathWidth, h: pt.h + kh }));
       b.ribbon(f.pts, top, C.kerb);
       b.ribbon(top, far, C.footpath);
-      b.ribbon(
-        far,
-        far.map((pt, i) => ({ x: pt.x + out[i].x, y: pt.y + out[i].y, h: pt.h - kh - 1 })),
-        C.bank,
-      );
+      if (f.deck) {
+        b.ribbon(far, far.map((pt) => ({ ...pt, h: pt.h - kh - 1.5 })), C.structure);
+        b.ribbon(far, far.map((pt) => ({ ...pt, h: pt.h + 1.0 })), C.barrier);
+      } else {
+        b.ribbon(
+          far,
+          far.map((pt, i) => ({ x: pt.x + out[i].x, y: pt.y + out[i].y, h: pt.h - kh - 1 })),
+          C.bank,
+        );
+      }
     }
     if (j.mouths.length >= 3) for (const mouth of j.mouths) stopLine(m, mouth.track, mouth.end, white, LIFT);
   }

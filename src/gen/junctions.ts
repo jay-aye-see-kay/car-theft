@@ -19,10 +19,13 @@ export interface JunctionShape {
   /** Boundary, anticlockwise. */
   ring: P3[];
   /** The curved kerbs between arms. `corner` is false where two arms are simply bridged. */
-  fillets: { pts: P3[]; corner: boolean; footpath: boolean }[];
+  /** `deck` is true where both arms are on a structure, so the edge between them is too. */
+  fillets: { pts: P3[]; corner: boolean; footpath: boolean; deck: boolean }[];
   /** Where each arm meets the junction, for stop lines. */
   mouths: { track: Track; end: 'a' | 'b' }[];
   status: JunctionStatus;
+  /** True if any of its edges is on a structure: it needs an underside. */
+  deck: boolean;
   x: number;
   y: number;
 }
@@ -118,6 +121,7 @@ export function solveJunctions(model: TileModel, tracks: Map<string, Track>, p: 
       return {
         dx,
         dy,
+        deck: arm.t.level[c.i] > 0 || arm.t.level[Math.min(arm.t.n - 1, c.i + 1)] > 0,
         ccw: { x: c.x - dy * hw, y: c.y + dx * hw, h: c.h },
         cw: { x: c.x + dy * hw, y: c.y - dx * hw, h: c.h },
       };
@@ -161,10 +165,10 @@ export function solveJunctions(model: TileModel, tracks: Map<string, Track>, p: 
         });
       }
       ring.push(...pts.slice(1, -1));
-      fillets.push({ pts, corner, footpath: corner && arms[i].t.road.footpath && arms[k].t.road.footpath });
+      fillets.push({ pts, corner, footpath: corner && arms[i].t.road.footpath && arms[k].t.road.footpath, deck: m.deck && next.deck });
     }
 
-    shapes.push({ id: j.id, ring, fillets, mouths: arms.map((a) => ({ track: a.t, end: a.end })), status, x: j.x, y: j.y });
+    shapes.push({ id: j.id, ring, fillets, mouths: arms.map((a) => ({ track: a.t, end: a.end })), status, deck: fillets.some((f) => f.deck), x: j.x, y: j.y });
   }
   return shapes;
 }

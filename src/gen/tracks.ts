@@ -269,7 +269,95 @@ export function solveElevations(model: TileModel, tracks: Map<string, Track>, gr
     }
   }
   markSpans(all);
+  liftForHeadroom(model, tracks, all);
+  markSpans(all);
   return jh;
+}
+
+type Sample = { t: Track; i: number };
+
+/** Buckets every sample on the ground so the roads near a point can be found quickly. */
+function groundGrid(all: Track[]): (x: number, y: number) => Sample[] {
+  const CELL = 16;
+  const grid = new Map<number, Sample[]>();
+  const key = (x: number, y: number): number => Math.floor(x / CELL) * 8192 + Math.floor(y / CELL);
+  for (const t of all) {
+    for (let i = 0; i < t.n; i++) {
+      if (t.level[i] !== 0) continue;
+      const k = key(t.x[i], t.y[i]);
+      let list = grid.get(k);
+      if (!list) grid.set(k, (list = []));
+      list.push({ t, i });
+    }
+  }
+  return (x, y) => {
+    const found: Sample[] = [];
+    for (let dx = -CELL; dx <= CELL; dx += CELL) for (let dy = -CELL; dy <= CELL; dy += CELL) found.push(...(grid.get(key(x + dx, y + dy)) ?? []));
+    return found;
+  };
+}
+
+/** Road surface to road surface where one crosses over another: room for a deck and a truck. */
+export const HEADROOM = 6;
+
+/**
+ * A bridge's height comes from the ground at its two ends, which can leave it skimming the road it
+ * crosses. Where that happens the deck is lifted to give headroom, and the lift is eased out along
+ * the road and through its junctions so the approaches climb to meet it.
+ */
+function liftForHeadroom(model: TileModel, tracks: Map<string, Track>, all: Track[]): void {
+  const near = groundGrid(all);
+  const need = new Map<Track, Float32Array>();
+  let any = false;
+  for (const t of all) {
+    const want = new Float32Array(t.n);
+    need.set(t, want);
+    for (let i = 0; i < t.n; i++) {
+      if (t.level[i] <= 0) continue;
+      for (const o of near(t.x[i], t.y[i])) {
+        if (o.t === t || o.t.h[o.i] > t.h[i] - 1.5) continue;
+        // Only a true crossing counts: a ramp peeling away from the road beside it is not passing over it.
+        if (Math.abs(t.tx[i] * o.t.ty[o.i] - t.ty[i] * o.t.tx[o.i]) < 0.4) continue;
+        if (Math.hypot(o.t.x[o.i] - t.x[i], o.t.y[o.i] - t.y[i]) > halfWidth(o.t, o.i) + 1) continue;
+        want[i] = Math.max(want[i], o.t.h[o.i] + HEADROOM - t.h[i]);
+      }
+      if (want[i] > 0) any = true;
+    }
+  }
+  if (!any) return;
+
+  const lift = new Map<Track, Float32Array>(all.map((t) => [t, need.get(t)!.slice()]));
+  for (let round = 0; round < 250; round++) {
+    for (const t of all) {
+      const d = lift.get(t)!;
+      const want = need.get(t)!;
+      let prev = d[0];
+      for (let i = 1; i < t.n - 1; i++) {
+        const next = Math.max(want[i], 0.25 * prev + 0.5 * d[i] + 0.25 * d[i + 1]);
+        prev = d[i];
+        d[i] = next;
+      }
+    }
+    // Every arm of a junction shares one height, so they share one lift.
+    for (const j of model.junctions) {
+      let sum = 0;
+      let most = 0;
+      for (const a of j.arms) {
+        const t = tracks.get(a.road)!;
+        sum += lift.get(t)![a.end === 'a' ? Math.min(1, t.n - 1) : Math.max(0, t.n - 2)];
+        most = Math.max(most, need.get(t)![a.end === 'a' ? 0 : t.n - 1]);
+      }
+      const v = Math.max(most, sum / j.arms.length);
+      for (const a of j.arms) {
+        const t = tracks.get(a.road)!;
+        lift.get(t)![a.end === 'a' ? 0 : t.n - 1] = v;
+      }
+    }
+  }
+  for (const t of all) {
+    const d = lift.get(t)!;
+    for (let i = 0; i < t.n; i++) t.h[i] += d[i];
+  }
 }
 
 /** Headroom that makes one road count as passing over another rather than meeting it. */
@@ -281,35 +369,16 @@ export const CLEARANCE = 4;
  * structure, whatever the tags say, so those stretches become deck too.
  */
 function markSpans(all: Track[]): void {
-  const CELL = 16;
-  const grid = new Map<number, { t: Track; i: number }[]>();
-  const key = (x: number, y: number): number => Math.floor(x / CELL) * 8192 + Math.floor(y / CELL);
-  for (const t of all) {
-    for (let i = 0; i < t.n; i++) {
-      if (t.level[i] !== 0) continue;
-      const k = key(t.x[i], t.y[i]);
-      let list = grid.get(k);
-      if (!list) grid.set(k, (list = []));
-      list.push({ t, i });
-    }
-  }
+  const near = groundGrid(all);
   const raise: [Track, number][] = [];
   for (const t of all) {
     for (let i = 0; i < t.n; i++) {
       if (t.level[i] !== 0) continue;
-      let over = false;
-      for (let dx = -CELL; dx <= CELL && !over; dx += CELL) {
-        for (let dy = -CELL; dy <= CELL && !over; dy += CELL) {
-          for (const o of grid.get(key(t.x[i] + dx, t.y[i] + dy)) ?? []) {
-            if (o.t === t || o.t.h[o.i] > t.h[i] - CLEARANCE) continue;
-            const reach = halfWidth(o.t, o.i) + halfWidth(t, i) * 0.6 + 1.5;
-            if (Math.hypot(o.t.x[o.i] - t.x[i], o.t.y[o.i] - t.y[i]) < reach) {
-              over = true;
-              break;
-            }
-          }
-        }
-      }
+      const over = near(t.x[i], t.y[i]).some((o) => {
+        if (o.t === t || o.t.h[o.i] > t.h[i] - CLEARANCE) return false;
+        const reach = halfWidth(o.t, o.i) + halfWidth(t, i) * 0.6 + 1.5;
+        return Math.hypot(o.t.x[o.i] - t.x[i], o.t.y[o.i] - t.y[i]) < reach;
+      });
       if (over) raise.push([t, i]);
     }
   }

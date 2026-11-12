@@ -90,8 +90,9 @@ export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junct
           ceiling[k] = Math.min(ceiling[k], h - 0.6);
         } else if (Math.abs(h - out.data[k]) < 4 || weight[k] > 0) {
           // Only where the ground is on this junction's level; a junction on a viaduct has open air under it.
+          // Where a road bed is already here, the lower surface wins, as it does between two roads.
+          target[k] = weight[k] >= 1 ? Math.min(target[k], h) : h;
           weight[k] = 1;
-          target[k] = h;
         }
       }
     }
