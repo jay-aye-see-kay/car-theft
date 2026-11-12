@@ -47,7 +47,8 @@ export function interpretBuildings(
   const buildings: Building[] = [];
   for (const o of outlines(data)) {
     const t = o.tags;
-    if (!t.building || t.building === 'no' || t.location === 'underground') continue;
+    // A bridge mapped as a building is already a road with a bridge level; do not build it twice.
+    if (!t.building || t.building === 'no' || t.building === 'bridge' || t.location === 'underground') continue;
     if (o.ring.length < 3 || !inRect(centroid(o.ring), bounds)) continue;
     const m = measure(o.ring);
     const tagged = parseFloat(t.height ?? '');
