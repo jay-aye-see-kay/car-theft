@@ -143,6 +143,8 @@ export function createStage(canvas: HTMLCanvasElement, initialLook: string) {
     car: new THREE.MeshToonMaterial({ vertexColors: true }),
     covers: new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide }),
     water: new THREE.MeshToonMaterial({ color: 0x3f8fc0 }),
+    // The cut faces round the tile's edge: earth, either side, since the winding depends on the edge.
+    skirt: new THREE.MeshToonMaterial({ color: 0x6b5a48, side: THREE.DoubleSide }),
     glass: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.42, depthWrite: false }),
     markings: new THREE.MeshBasicMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
     falls: new THREE.MeshBasicMaterial({ color: 0xeaf6ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),

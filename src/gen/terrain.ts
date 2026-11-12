@@ -141,6 +141,29 @@ export function buildTerrainGeometry(hf: Heightfield): THREE.BufferGeometry {
   return g;
 }
 
+/** Walls down each edge of the tile to `bottom`, so the ground reads as a solid block and nothing shows underneath it. */
+export function buildTerrainSkirt(hf: Heightfield, bottom: number): THREE.BufferGeometry {
+  const { cols, rows, cell, x0, y0, data } = hf;
+  const pos: number[] = [];
+  const edge = (cells: [number, number][]) => {
+    for (let i = 1; i < cells.length; i++) {
+      const [[c0, r0], [c1, r1]] = [cells[i - 1], cells[i]];
+      const [ax, ay, ah] = [x0 + c0 * cell, y0 + r0 * cell, data[r0 * cols + c0]];
+      const [bx, by, bh] = [x0 + c1 * cell, y0 + r1 * cell, data[r1 * cols + c1]];
+      pos.push(ax, ah, -ay, ax, bottom, -ay, bx, bh, -by, bx, bh, -by, ax, bottom, -ay, bx, bottom, -by);
+    }
+  };
+  const run = (n: number, f: (i: number) => [number, number]) => Array.from({ length: n }, (_, i) => f(i));
+  edge(run(cols, (c) => [c, 0]));
+  edge(run(rows, (r) => [cols - 1, r]));
+  edge(run(cols, (c) => [cols - 1 - c, rows - 1]));
+  edge(run(rows, (r) => [0, rows - 1 - r]));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
 export const AREA_COLOURS: Record<Area['kind'], string> = {
   park: '#86b867',
   cemetery: '#6f9a6a',

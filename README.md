@@ -12,4 +12,6 @@ npm run fetch   # OpenStreetMap + LINZ 1 m LiDAR into .cache/ (no API key)
 npm run bake    # interpret into public/tiles/<id>/model.json + height.bin
 ```
 
-Data: OpenStreetMap contributors (ODbL); LINZ elevation, Auckland 2024 (CC BY 4.0).
+Data: OpenStreetMap contributors (ODbL); LINZ elevation, Auckland 2024 (CC BY 4.0); Auckland Unitary Plan base zones,
+Plans and Places, Auckland Council (CC BY 4.0, and their terms ask for consent before republishing any substantial
+amount, so tiles keep only the zones they cover).

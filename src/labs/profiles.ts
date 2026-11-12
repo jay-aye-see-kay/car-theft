@@ -9,6 +9,7 @@ import { loadTile } from '../model/load.ts';
 import { ProfileContext } from '../profile/context.ts';
 import { PROFILES } from '../profile/library.ts';
 import { type Level, clearResolved, leaves } from '../profile/resolve.ts';
+import { fromNztm } from '../geo/nztm.ts';
 import { createDrive, createStage, lookAtLatLon } from '../view/stage.ts';
 import { World } from '../view/world.ts';
 
@@ -53,6 +54,7 @@ function renderHud(): void {
     <h1>Place profiles · ${model.title}</h1>
     <p>Each point resolves base → region → district (planning zone) → place → override, and every generator reads the result. Click anything to see why it is the way it is.</p>
     <p class="detail">${ctx.profiles.length} distinct resolved profiles. Placed: ${kits}.</p>
+    ${world.stamps.map(({ spec, run }) => `<p class="detail">Stamp: ${spec.name}, a ${(world.surface.at(...run[0]) - world.surface.at(...run[run.length - 1])).toFixed(0)} m drop.</p>`).join('')}
     <div class="legend">${legend}</div>
     <p class="detail">${drive.on ? '<b>Driving:</b> WASD or arrows.' : 'Drag to pan, right-drag to orbit, click to inspect.'}</p>`;
 }
@@ -89,7 +91,7 @@ function inspect(x: number, y: number): void {
   if (b) {
     const c = ctx.chooseStyle(b);
     const o = ctx.overrideFor(`building:${b.id}`);
-    html += `<h2>${b.name ?? 'Building'} <code>${b.id}</code></h2><p>${b.kind} (${useOf(b.kind)}), ${b.h} m, ${Math.max(1, Math.round(b.h / 3.3))} floors. Style <b>${c.style.name}</b>: “${c.rule.why}” <span class="src">from ${c.ruleFrom}</span>.${o ? ` Override: ${o.note}` : ''}</p>`;
+    html += `<h2>${b.name ?? 'Building'} <code>${b.id}</code></h2><p>${b.kind} (${useOf(b.kind)}), ${b.h} m, ${Math.max(1, Math.round(b.h / 3.3))} floors. Style <b>${c.style.name}</b>: “${c.rule.why}” <span class="src">from ${c.ruleFrom}</span>${o && !c.ruleFrom.startsWith('override') ? ` Override: ${o.note}` : ''}</p>`;
   }
   for (const p of near) html += `<p>Placed <b>${p.kit}</b> by ${ctx.profiles[p.profile]?.top.title ?? 'street rules'}.</p>`;
   const rows = [...leaves(b ? ctx.forBuilding(b) : info.profile)].map(([k, v, from]) => `<div><code>${k}</code> = ${JSON.stringify(v).slice(0, 80)} <span class="src">${from}</span></div>`).join('');
@@ -120,9 +122,22 @@ const go = (lat: number, lon: number, d: number, b: number, p?: number) => lookA
 
 stage.applyLook();
 world.generate();
+// Stamps find their own spot, so jump to where each one actually landed rather than its anchor.
+for (const { spec, run } of world.stamps) {
+  const entry = PLACES[tile].find((p) => p[0] === spec.name);
+  if (!entry) continue;
+  // Aim at the middle of the drop, looking upstream from below it.
+  const [[tx, ty], [bx, by]] = [run[0], run[run.length - 1]];
+  [entry[1], entry[2]] = fromNztm((tx + bx) / 2 + model.origin.e, (ty + by) / 2 + model.origin.n);
+  [entry[3], entry[4]] = [80, (Math.atan2(tx - bx, ty - by) * 180) / Math.PI];
+}
 const at = query.get('at')?.split(',').map(Number);
 if (at && at.length >= 4 && at.every(Number.isFinite)) go(at[0], at[1], at[2], at[3], at[4]);
-else go(...(PLACES[tile][0].slice(1) as [number, number, number, number]));
+else {
+  const want = query.get('jump')?.toLowerCase();
+  const place = PLACES[tile].find((p) => want && p[0].toLowerCase().startsWith(want)) ?? PLACES[tile][0];
+  go(...(place.slice(1) as [number, number, number, number]));
+}
 world.rebuildBuildings();
 renderHud();
 stage.onFrame(() => world.follow());

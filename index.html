@@ -20,7 +20,7 @@
   <body>
     <main>
       <h1>Car Theft labs</h1>
-      <p class="lede">Procedural generation experiments. One real slice of central Auckland, 1.8 km by 2.2 km at 1:1.</p>
+      <p class="lede">Procedural generation experiments. Real slices of Auckland at 1:1: the central city from Albert Park to Grafton, and the west coast from Piha to Kitekite Falls.</p>
       <a class="lab" href="labs/model/">
         <h2>1. The semantic model</h2>
         <p>What the generators are given: roads with lane profiles, merged junctions, buildings with LiDAR heights, land areas and paths. No geometry decisions yet. Click a road to inspect it.</p>
@@ -37,7 +37,11 @@
         <h2>4. Building grammar</h2>
         <p>Buildings near the view grown from footprint and height by a split grammar: floors, bays, windows, shopfronts, awnings, balconies, roofs. Seven styles picked by use and size.</p>
       </a>
-      <p><small>Data: OpenStreetMap contributors (ODbL); LINZ elevation, Auckland 2024 (CC BY 4.0).</small></p>
+      <a class="lab" href="labs/profiles/">
+        <h2>5. Place profiles</h2>
+        <p>The vibe of a place as data: each point resolves a stack of profiles (region, planning zone, mapped place, hand-drawn place, override) and every generator reads it. Profile and zoning maps, layer toggles, swaps, and a click inspector that says why. Switch to the Piha tile in its panel.</p>
+      </a>
+      <p><small>Data: OpenStreetMap contributors (ODbL); LINZ elevation, Auckland 2024 (CC BY 4.0); Auckland Unitary Plan zones, Auckland Council (CC BY 4.0).</small></p>
     </main>
   </body>
 </html>

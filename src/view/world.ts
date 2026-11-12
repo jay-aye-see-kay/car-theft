@@ -9,7 +9,7 @@ import { solveJunctions } from '../gen/junctions.ts';
 import { buildRoadMeshes } from '../gen/roadMesh.ts';
 import { type Instance, occupancy, scatter } from '../gen/scatter.ts';
 import { furnishStreets } from '../gen/street.ts';
-import { type MapMode, buildTerrainGeometry, gradeTerrain, paintGround } from '../gen/terrain.ts';
+import { type MapMode, buildTerrainGeometry, buildTerrainSkirt, gradeTerrain, paintGround } from '../gen/terrain.ts';
 import { DEFAULT_PARAMS, type Track, buildTrack, solveElevations } from '../gen/tracks.ts';
 import { centroid } from '../geo/poly.ts';
 import { type Kit, kits, toneColour } from '../kit/kits.ts';
@@ -161,6 +161,7 @@ export class World {
       return mesh;
     };
     this.terrainMesh = add(buildTerrainGeometry(graded), mats.terrain, false, true);
+    add(buildTerrainSkirt(graded, -30), mats.skirt, false, false);
     add(roads.surface, mats.surface, true, true);
     add(roads.markings, mats.markings, false, false);
     const covers = buildCovers(model.buildings, graded, tracks.values());
@@ -168,7 +169,16 @@ export class World {
     add(covers.glass, mats.glass, false, false);
     if (model.sea) {
       // The sea: one flat sheet at sea level, under which the LiDAR's flattened water was pushed down.
-      const sea = add(new THREE.PlaneGeometry(model.size.x + 4000, model.size.y + 4000).rotateX(-Math.PI / 2).translate(0, 0.05, 0), mats.water, false, true);
+      // It only runs on past the tile's edges where those edges are mostly at sea, so inland edges don't read as an island.
+      const [hx, hy] = [model.size.x / 2, model.size.y / 2];
+      const wet = (sample: (t: number) => [number, number]) => {
+        let n = 0;
+        for (let i = 0; i <= 40; i++) if (graded.at(...sample(i / 40)) < 1) n++;
+        return n > 20 ? 3000 : -4;
+      };
+      const [w, e, s, n] = [wet((t) => [-hx + 1, -hy + t * 2 * hy]), wet((t) => [hx - 1, -hy + t * 2 * hy]), wet((t) => [-hx + t * 2 * hx, -hy + 1]), wet((t) => [-hx + t * 2 * hx, hy - 1])];
+      const sheet = new THREE.PlaneGeometry(2 * hx + w + e, 2 * hy + s + n).rotateX(-Math.PI / 2).translate((e - w) / 2, 0.05, -(n - s) / 2);
+      const sea = add(sheet, mats.water, false, true);
       sea.renderOrder = 1;
     }
     for (const s of buildStamps(model, graded, opts.hillScale, this.stamps)) add(s.geometry, s.material === 'falls' ? mats.falls : mats.covers, false, true);
@@ -189,9 +199,12 @@ export class World {
     lap('street');
     let trees = 0;
     if (opts.trees) {
-      const found = scatter(model, graded, occupancy(model, tracks.values()), this.ctx);
+      // Trees stay out of the stamps (the falls and their pool) so they can be seen.
+      const occ = occupancy(model, tracks.values());
+      const nearStamp = (x: number, y: number) => this.stamps.some(({ run }) => run.some((p) => Math.hypot(p[0] - x, p[1] - y) < 14));
+      const found = scatter(model, graded, (x, y) => occ(x, y) || nearStamp(x, y), this.ctx);
       for (const f of found) if (TREE_KITS.has(f.kit)) trees++;
-      placed.push(...found);
+      for (const f of found) placed.push(f);
     }
     this.stats.trees = trees;
     lap('scatter');
