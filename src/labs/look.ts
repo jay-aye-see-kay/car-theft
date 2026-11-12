@@ -8,6 +8,7 @@ import '../ui/lab.css';
 import { toNztm } from '../geo/nztm.ts';
 import { buildMassing } from '../gen/buildings.ts';
 import { buildCovers } from '../gen/covers.ts';
+import { type Prop, furnishStreets } from '../gen/street.ts';
 import { buildFacades } from '../gen/facade.ts';
 import { solveJunctions } from '../gen/junctions.ts';
 import { buildRoadMeshes } from '../gen/roadMesh.ts';
@@ -85,6 +86,7 @@ const state = {
   look: query.get('look') && query.get('look')! in LOOKS ? query.get('look')! : 'Toy city',
   hillScale: Number(query.get('hills')) || 1,
   driving: false,
+  furniture: !query.has('bare'),
   /** Build real facades for buildings near the view; the rest stay as boxes with shader windows. */
   detail: lab === 'buildings',
   detailRadius: 260,
@@ -162,6 +164,21 @@ const mats = {
   markings: new THREE.MeshBasicMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
 };
 const toons = [mats.terrain, mats.surface, mats.buildings, mats.facades, mats.trees, mats.car, mats.covers];
+// Lamp heads and the pools of light under them brighten with the look's glow, like the windows do.
+const lampHeads = new THREE.MeshBasicMaterial();
+function poolTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 64;
+  const g = cv.getContext('2d')!;
+  const fade = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  fade.addColorStop(0, '#fff');
+  fade.addColorStop(0.35, '#999');
+  fade.addColorStop(1, '#000');
+  g.fillStyle = fade;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(cv);
+}
+const lampPools = new THREE.MeshBasicMaterial({ map: poolTexture(), color: 0xffb860, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
 
 // Windows are drawn by the shader from the wall's bay grid: bays across, floors up. The grid
 // comes from the building's real width and height, which is what an interior would also use.
@@ -227,6 +244,32 @@ function treeGeometry(): THREE.BufferGeometry {
 }
 const treeShape = treeGeometry();
 
+/** Street furniture, modelled facing along +x. */
+function propShapes() {
+  const box = (w: number, h: number, d: number, x: number, y: number, z: number, c: number): THREE.BufferGeometry => {
+    const g = new THREE.BoxGeometry(w, h, d).translate(x, y, z).toNonIndexed();
+    const col = new THREE.Color(c);
+    const a = new Float32Array(g.getAttribute('position').count * 3);
+    for (let i = 0; i < a.length; i += 3) col.toArray(a, i);
+    g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+    return g;
+  };
+  return {
+    lamp: mergeGeometries([box(0.16, 8, 0.16, 0, 4, 0, 0x5c6470), box(1.9, 0.1, 0.1, 0.9, 7.95, 0, 0x5c6470)])!,
+    head: box(0.75, 0.14, 0.32, 1.75, 7.84, 0, 0xffffff),
+    pool: new THREE.CircleGeometry(10, 20).rotateX(-Math.PI / 2).translate(1.75, 0.1, 0),
+    signal: mergeGeometries([
+      box(0.14, 3.3, 0.14, 0, 1.65, 0, 0x4b5058),
+      box(0.3, 1.05, 0.36, 0, 3.8, 0, 0x23262b),
+      box(0.06, 0.22, 0.22, 0.17, 4.12, 0, 0xd8402f),
+      box(0.06, 0.22, 0.22, 0.17, 3.8, 0, 0xe0a020),
+      box(0.06, 0.22, 0.22, 0.17, 3.48, 0, 0x35b05a),
+    ])!,
+  };
+}
+const shapes = propShapes();
+const shared = new Set<THREE.BufferGeometry>([treeShape, ...Object.values(shapes)]);
+
 const world = new THREE.Group();
 scene.add(world);
 let surfaceAt: Heightfield = ground;
@@ -261,7 +304,7 @@ function rebuildBuildings(): void {
 }
 
 function generate(): void {
-  for (const child of world.children) if ((child as THREE.Mesh).geometry !== treeShape) (child as THREE.Mesh).geometry.dispose();
+  for (const child of world.children) if (!shared.has((child as THREE.Mesh).geometry)) (child as THREE.Mesh).geometry.dispose();
   world.clear();
 
   // Exaggeration happens to the input, so roads, banks and buildings all follow it.
@@ -291,6 +334,38 @@ function generate(): void {
   add(covers.glass, mats.glass, false, false);
   rebuildBuildings();
 
+  propCount = 0;
+  if (state.furniture) {
+    const props = furnishStreets(tracks.values(), junctions, DEFAULT_PARAMS, occupancy(model, [], 'buildings'));
+    propCount = props.length;
+    const up = new THREE.Vector3(0, 1, 0);
+    const instances = (kinds: Prop['kind'][], geometry: THREE.BufferGeometry, material: THREE.Material, cast: boolean, tint?: (p: Prop, c: THREE.Color) => void): void => {
+      const list = props.filter((p) => kinds.includes(p.kind));
+      if (!list.length) return;
+      const mesh = new THREE.InstancedMesh(geometry, material, list.length);
+      const m = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      const c = new THREE.Color();
+      list.forEach((p, i) => {
+        q.setFromAxisAngle(up, p.yaw);
+        m.compose(new THREE.Vector3(p.x, p.h, -p.y), q, new THREE.Vector3(p.size, p.size, p.size));
+        mesh.setMatrixAt(i, m);
+        if (tint) {
+          tint(p, c);
+          mesh.setColorAt(i, c);
+        }
+      });
+      mesh.castShadow = cast;
+      mesh.receiveShadow = cast;
+      world.add(mesh);
+    };
+    instances(['lamp', 'mast'], shapes.lamp, mats.covers, true);
+    instances(['lamp', 'mast'], shapes.head, lampHeads, false);
+    instances(['lamp', 'mast'], shapes.pool, lampPools, false);
+    instances(['signal'], shapes.signal, mats.covers, true);
+    if (look.trees) instances(['tree'], treeShape, mats.trees, true, (p, c) => c.setHSL(0.24 + p.tint * 0.07, 0.46, 0.33 + p.tint * 0.08));
+  }
+
   if (look.trees) {
     const trees = scatterTrees(model, graded, occupancy(model, tracks.values()));
     const mesh = new THREE.InstancedMesh(treeShape, mats.trees, trees.length);
@@ -312,6 +387,7 @@ function generate(): void {
   } else treeCount = 0;
 }
 let treeCount = 0;
+let propCount = 0;
 
 // Outlines: draw the scene to a texture, then ink wherever depth breaks or creases.
 const target = new THREE.WebGLRenderTarget(1, 1, { samples: 4, type: THREE.HalfFloatType });
@@ -369,6 +445,9 @@ function applyLook(): void {
   scene.fog!.color.setHex(look.horizon);
   facade.uWindows.value = look.windows;
   facade.uGlow.value = look.glow;
+  lampHeads.color.setHex(0x8d949c).lerp(new THREE.Color(0xfff0c0), Math.min(1, look.glow * 1.5));
+  lampPools.opacity = Math.min(0.7, look.glow * 0.45);
+  lampPools.visible = look.glow > 0;
   post.uniforms.strength.value = look.outline;
   (post.uniforms.ink.value as THREE.Color).setHex(look.ink);
 }
@@ -378,7 +457,7 @@ function renderHud(): void {
     <a class="back" href="../../">← labs</a>
     <h1>${TITLE}</h1>
     <p>${lab === 'buildings' ? 'Every building within reach of the view is grown from its footprint and height by one small grammar: walls, floors, bays, then windows, shopfronts, awnings and roofs. Farther ones stay as boxes on the same grid.' : look.about}</p>
-    <p class="detail">${state.detail ? `${detailCount} buildings with built facades right now. ` : ''}${treeCount.toLocaleString()} trees placed by land type.
+    <p class="detail">${state.detail ? `${detailCount} buildings with built facades right now. ` : ''}${treeCount.toLocaleString()} trees placed by land type${propCount ? `, ${propCount.toLocaleString()} lamps, street trees and signals by street type` : ''}.
     ${state.driving ? '<b>Driving:</b> WASD or arrows, or drag on a touch screen. Shift is faster.' : 'Drag to pan, right-drag or two fingers to orbit.'}</p>`;
 }
 
@@ -525,6 +604,7 @@ style.add(look, 'palette', ['toy', 'grey']).name('Building colours').onChange(ge
 style.add(state, 'detail').name('Built facades nearby').onChange(rebuildBuildings);
 style.add(state, 'detailRadius', 80, 600, 10).name('Facade reach (m)').onFinishChange(rebuildBuildings);
 style.add(look, 'trees').name('Trees').onChange(() => (generate(), renderHud()));
+style.add(state, 'furniture').name('Street furniture').onChange(() => (generate(), renderHud()));
 style.add(state, 'hillScale', 1, 2.5, 0.1).name('Hill exaggeration').onFinishChange(generate);
 light.add(look, 'sunBearing', 0, 360, 1).name('Sun bearing');
 light.add(look, 'sunHeight', 2, 85, 1).name('Sun height');

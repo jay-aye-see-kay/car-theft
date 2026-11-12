@@ -94,20 +94,20 @@ export function buildCovers(buildings: Building[], ground: Heightfield, tracks: 
       frame.quad([...p, under], [...q, under], [...q, top], [...p, top], COLOURS.fascia);
       // A post at each corner and along long edges, set in a little from the roof's edge.
       const len = dist(p, q);
-      const n = Math.max(1, Math.ceil(len / 6));
+      // Taller roofs stand on fewer, heavier posts.
+      const n = Math.max(1, Math.ceil(len / Math.max(6, (top - base) * 1.5)));
       if (len < 1.2 && ring.length > 4) return;
       for (let s = 0; s < n; s++) {
         const u = s / n;
         const x = p[0] + (q[0] - p[0]) * u;
         const y = p[1] + (q[1] - p[1]) * u;
         const pull = Math.min(0.4, Math.hypot(c[0] - x, c[1] - y) * 0.3) / (Math.hypot(c[0] - x, c[1] - y) || 1);
-        post(x + (c[0] - x) * pull, y + (c[1] - y) * pull, under);
+        post(x + (c[0] - x) * pull, y + (c[1] - y) * pull, under, Math.max(0.11, (top - base) * 0.035));
       }
     });
   }
 
-  function post(x: number, y: number, top: number): void {
-    const r = 0.11;
+  function post(x: number, y: number, top: number, r: number): void {
     const foot = ground.at(x, y) - 0.4;
     const corners: Pt[] = [
       [x - r, y - r],

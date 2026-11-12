@@ -28,8 +28,8 @@ function hash(ix: number, iy: number, salt: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-/** A 2 m raster of everything a tree must not stand on: buildings, roads and footpaths. */
-export function occupancy(model: TileModel, tracks: Iterable<Track>, what: 'everything' | 'roads' = 'everything'): (x: number, y: number) => boolean {
+/** A 2 m raster of everything a tree must not stand on: buildings, roads and footpaths. Or of just the roads, or just the buildings. */
+export function occupancy(model: TileModel, tracks: Iterable<Track>, what: 'everything' | 'roads' | 'buildings' = 'everything'): (x: number, y: number) => boolean {
   const cell = 2;
   const cv = document.createElement('canvas');
   cv.width = Math.ceil(model.size.x / cell);
@@ -46,14 +46,14 @@ export function occupancy(model: TileModel, tracks: Iterable<Track>, what: 'ever
     g.lineWidth = 3;
     g.stroke();
   }
-  for (const a of what === 'roads' ? [] : model.areas) {
+  for (const a of what === 'everything' ? model.areas : []) {
     if (a.kind !== 'pitch' && a.kind !== 'water' && a.kind !== 'parking' && a.kind !== 'plaza') continue;
     g.beginPath();
     a.ring.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
     g.closePath();
     g.fill();
   }
-  for (const t of tracks) {
+  for (const t of what === 'buildings' ? [] : tracks) {
     g.beginPath();
     for (let i = 0; i < t.n; i++) {
       if (i) g.lineTo(t.x[i], t.y[i]);
@@ -62,7 +62,7 @@ export function occupancy(model: TileModel, tracks: Iterable<Track>, what: 'ever
     g.lineWidth = 2 * halfWidth(t, t.n >> 1) + 9;
     g.stroke();
   }
-  for (const p of what === 'roads' ? [] : model.paths) {
+  for (const p of what === 'everything' ? model.paths : []) {
     g.beginPath();
     p.pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
     g.lineWidth = 4;
