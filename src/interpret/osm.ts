@@ -19,6 +19,8 @@ export interface OsmRelation {
 export interface OsmData {
   /** Node positions in local metres (x east, y north of the tile centre). */
   nodes: Map<number, Pt>;
+  /** Nodes that carry tags of their own. */
+  tagged: { id: number; at: Pt; tags: Tags }[];
   ways: Map<number, OsmWay>;
   relations: OsmRelation[];
 }
@@ -34,11 +36,12 @@ interface RawElement {
 }
 
 export function parseOsm(json: { elements: RawElement[] }, originE: number, originN: number): OsmData {
-  const data: OsmData = { nodes: new Map(), ways: new Map(), relations: [] };
+  const data: OsmData = { nodes: new Map(), tagged: [], ways: new Map(), relations: [] };
   for (const el of json.elements) {
     if (el.type === 'node') {
       const [e, n] = toNztm(el.lat!, el.lon!);
       data.nodes.set(el.id, [e - originE, n - originN]);
+      if (el.tags) data.tagged.push({ id: el.id, at: [e - originE, n - originN], tags: el.tags });
     } else if (el.type === 'way') {
       data.ways.set(el.id, { id: el.id, nodes: el.nodes ?? [], tags: el.tags ?? {} });
     } else {

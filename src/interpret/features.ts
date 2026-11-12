@@ -1,6 +1,6 @@
 // Buildings, land areas and footpaths from OpenStreetMap, for the semantic model.
 import { type Rect, centroid, clipRing, inRect, ringArea, simplify, simplifyRing } from '../geo/poly.ts';
-import type { Area, Building, Path, Pt, Road } from '../model/types.ts';
+import type { Area, Building, Landmark, Path, Pt, Road, Stream, Zone } from '../model/types.ts';
 import { type OsmData, type Tags, stitchRings } from './osm.ts';
 
 const round = (v: number): number => Math.round(v * 100) / 100;
@@ -119,6 +119,8 @@ function areaKind(t: Tags): Area['kind'] | undefined {
   if (t.amenity === 'university' || t.amenity === 'college') return 'campus';
   if (t.amenity === 'parking' && t.parking !== 'underground' && t.parking !== 'multi-storey') return 'parking';
   if (t.highway === 'pedestrian' && t.area === 'yes') return 'plaza';
+  if (t.natural === 'beach' || t.natural === 'sand') return 'beach';
+  if (t.natural === 'bare_rock') return 'rock';
   return undefined;
 }
 
@@ -167,4 +169,69 @@ export function interpretPaths(data: OsmData, bounds: Rect): { paths: Path[]; re
   }
   report['paths.count'] = paths.length;
   return { paths, report };
+}
+
+export function interpretStreams(data: OsmData, bounds: Rect): Stream[] {
+  const streams: Stream[] = [];
+  for (const w of data.ways.values()) {
+    const ww = w.tags.waterway;
+    const kind: Stream['kind'] | undefined = ww === 'river' ? 'river' : ww === 'stream' ? 'stream' : ww === 'drain' || ww === 'ditch' ? 'drain' : undefined;
+    if (!kind || w.tags.tunnel === 'culvert' || w.tags.location === 'underground') continue;
+    let run: Pt[] = [];
+    let part = 0;
+    const flush = () => {
+      if (run.length > 1) streams.push({ id: `w${w.id}${part++ ? '.' + part : ''}`, kind, pts: roundRing(simplify(run, 0.5)), name: w.tags.name });
+      run = [];
+    };
+    for (const id of w.nodes) {
+      const p = data.nodes.get(id);
+      if (p && inRect(p, bounds)) run.push(p);
+      else flush();
+    }
+    flush();
+  }
+  return streams;
+}
+
+/** Zones that are only the land under roads say nothing a road does not; they are left out. */
+const SKIP_ZONES = new Set(['Road', 'Strategic Transport Corridor Zone', 'DELETED']);
+
+/** Unitary Plan base zones (GeoJSON in NZTM) clipped to the tile, smallest last so a lookup can take the last match. */
+export function interpretZones(
+  json: { names: Record<string, string>; features: { properties: { OBJECTID: number; ZONE: number }; geometry: { type: string; coordinates: number[][][] | number[][][][] } | null }[] },
+  originE: number,
+  originN: number,
+  bounds: Rect,
+): { zones: Zone[]; report: Record<string, number> } {
+  const report: Record<string, number> = {};
+  const zones: Zone[] = [];
+  for (const f of json.features) {
+    const name = json.names[f.properties.ZONE] ?? `Zone ${f.properties.ZONE}`;
+    if (SKIP_ZONES.has(name) || !f.geometry) {
+      report['zones.skippedRoad'] = (report['zones.skippedRoad'] ?? 0) + 1;
+      continue;
+    }
+    const polys = f.geometry.type === 'MultiPolygon' ? (f.geometry.coordinates as number[][][][]) : [f.geometry.coordinates as number[][][]];
+    polys.forEach((poly, i) => {
+      // Holes are left out: whatever fills a hole is its own, smaller zone, and smaller zones win.
+      let ring = poly[0].map(([e, n]): Pt => [e - originE, n - originN]);
+      ring.pop();
+      if (ringArea(ring) < 0) ring.reverse();
+      ring = clipRing(simplifyRing(ring, 0.5), bounds);
+      if (ring.length < 3 || Math.abs(ringArea(ring)) < 30) return;
+      zones.push({ id: `z${f.properties.OBJECTID}${i ? '.' + i : ''}`, zone: name, ring: roundRing(ring) });
+    });
+  }
+  zones.sort((a, b) => Math.abs(ringArea(b.ring)) - Math.abs(ringArea(a.ring)));
+  report['zones.count'] = zones.length;
+  return { zones, report };
+}
+
+export function interpretLandmarks(data: OsmData, bounds: Rect): Landmark[] {
+  const out: Landmark[] = [];
+  for (const n of data.tagged) {
+    const kind: Landmark['kind'] | undefined = n.tags.waterway === 'waterfall' ? 'waterfall' : n.tags.natural === 'peak' ? 'peak' : undefined;
+    if (kind && inRect(n.at, bounds)) out.push({ id: `n${n.id}`, kind, x: round(n.at[0]), y: round(n.at[1]), name: n.tags.name });
+  }
+  return out;
 }

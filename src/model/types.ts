@@ -56,7 +56,7 @@ export interface Building {
 
 export interface Area {
   id: string;
-  kind: 'park' | 'cemetery' | 'campus' | 'water' | 'wood' | 'pitch' | 'parking' | 'plaza';
+  kind: 'park' | 'cemetery' | 'campus' | 'water' | 'wood' | 'pitch' | 'parking' | 'plaza' | 'beach' | 'rock';
   ring: Pt[];
   name?: string;
 }
@@ -66,6 +66,34 @@ export interface Path {
   kind: 'foot' | 'steps' | 'cycle';
   pts: Pt[];
   level: number;
+}
+
+/** A named spot: a waterfall, a summit. */
+export interface Landmark {
+  id: string;
+  kind: 'waterfall' | 'peak';
+  x: number;
+  y: number;
+  name?: string;
+}
+
+/** A watercourse, as a centreline. */
+export interface Stream {
+  id: string;
+  kind: 'river' | 'stream' | 'drain';
+  pts: Pt[];
+  name?: string;
+}
+
+/**
+ * A planning zone: what the council says the land is for (Auckland Unitary Plan base zones).
+ * It describes intent and density, not what is built there today.
+ */
+export interface Zone {
+  id: string;
+  /** The plan's own zone name, e.g. "Business - City Centre Zone". */
+  zone: string;
+  ring: Pt[];
 }
 
 export interface HeightInfo {
@@ -90,6 +118,12 @@ export interface TileModel {
   buildings: Building[];
   areas: Area[];
   paths: Path[];
+  /** Missing from tiles baked before zoning and streams were added. */
+  streams?: Stream[];
+  landmarks?: Landmark[];
+  zones?: Zone[];
+  /** True where the tile reaches the sea: ground below 0 m is under water. */
+  sea?: boolean;
   /** Notes from the interpreter about what it changed or could not resolve. */
   report: Record<string, number>;
 }

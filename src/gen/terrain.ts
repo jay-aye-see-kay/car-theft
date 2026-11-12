@@ -4,6 +4,7 @@ import { pointInRing } from '../geo/poly.ts';
 import type { Heightfield } from '../model/load.ts';
 import type { Area, Path, Pt, TileModel } from '../model/types.ts';
 import type { JunctionShape } from './junctions.ts';
+import type { ProfileContext } from '../profile/context.ts';
 import { type RoadParams, type Track, halfWidth } from './tracks.ts';
 
 /** How far the ground sits below a road surface, so it can never show through. */
@@ -149,10 +150,35 @@ export const AREA_COLOURS: Record<Area['kind'], string> = {
   pitch: '#74c06a',
   parking: '#8d9096',
   plaza: '#cfc6b4',
+  beach: '#ecdcae',
+  rock: '#8a8478',
 };
 
-/** Paints land use and footpaths into one texture draped over the terrain. */
-export function paintGround(model: TileModel, pxPerMetre = 1.5): HTMLCanvasElement {
+export type MapMode = 'generated' | 'profiles' | 'zoning';
+
+/** Zone families on the zoning map, by the first word of the zone's name. */
+export const ZONE_COLOURS: Record<string, string> = {
+  Business: '#5b8fd9',
+  Residential: '#e8c766',
+  'Open Space': '#7cc26a',
+  'Special Purpose': '#d77aa0',
+  Rural: '#3d7f52',
+  Coastal: '#d9cf9a',
+  'Future Urban': '#c9a6e0',
+  Water: '#6fb0d8',
+  Green: '#9ad07a',
+};
+
+export const zoneFamily = (zone: string): string => Object.keys(ZONE_COLOURS).find((k) => zone.startsWith(k)) ?? 'Other';
+
+const css = (n: number): string => '#' + n.toString(16).padStart(6, '0');
+
+/**
+ * Paints land use and footpaths into one texture draped over the terrain. With a profile context,
+ * each place's profile picks its ground colours; the map modes paint the profile map or the raw
+ * zoning instead, for checking what the generators were told.
+ */
+export function paintGround(model: TileModel, pxPerMetre = 1.5, ctx?: ProfileContext, mode: MapMode = 'generated'): HTMLCanvasElement {
   const cv = document.createElement('canvas');
   cv.width = Math.round(model.size.x * pxPerMetre);
   cv.height = Math.round(model.size.y * pxPerMetre);
@@ -160,23 +186,92 @@ export function paintGround(model: TileModel, pxPerMetre = 1.5): HTMLCanvasEleme
   g.fillStyle = '#a9ad98';
   g.fillRect(0, 0, cv.width, cv.height);
   // Canvas y runs down; tile y runs north.
-  g.setTransform(pxPerMetre, 0, 0, -pxPerMetre, cv.width / 2, cv.height / 2);
+  const toTile = () => g.setTransform(pxPerMetre, 0, 0, -pxPerMetre, cv.width / 2, cv.height / 2);
+  toTile();
   const trace = (pts: Pt[], close: boolean) => {
     g.beginPath();
     pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
     if (close) g.closePath();
   };
-  for (const a of model.areas) {
-    trace(a.ring, true);
-    g.fillStyle = AREA_COLOURS[a.kind];
-    g.fill();
+
+  if (ctx && mode !== 'zoning') {
+    // One pixel per profile cell, scaled up: smoothed for real ground so districts blend, sharp for the map.
+    const grid = ctx.grid;
+    const small = document.createElement('canvas');
+    small.width = grid.cols;
+    small.height = grid.rows;
+    const sg = small.getContext('2d')!;
+    const img = sg.createImageData(grid.cols, grid.rows);
+    for (let c = 0; c < grid.size; c++) {
+      const p = ctx.profiles[ctx.cells[c]];
+      const col = mode === 'profiles' ? p.top.swatch : p.value.ground.base;
+      const row = grid.rows - 1 - Math.floor(c / grid.cols);
+      const k = (row * grid.cols + (c % grid.cols)) * 4;
+      img.data[k] = (col >> 16) & 255;
+      img.data[k + 1] = (col >> 8) & 255;
+      img.data[k + 2] = col & 255;
+      img.data[k + 3] = 255;
+    }
+    sg.putImageData(img, 0, 0);
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.imageSmoothingEnabled = mode !== 'profiles';
+    g.drawImage(small, 0, 0, cv.width, cv.height);
+    toTile();
   }
+
+  if (mode === 'zoning') {
+    for (const z of model.zones ?? []) {
+      trace(z.ring, true);
+      g.fillStyle = ZONE_COLOURS[zoneFamily(z.zone)] ?? '#bbbbbb';
+      g.fill();
+      g.strokeStyle = 'rgba(0,0,0,0.35)';
+      g.lineWidth = 1.2;
+      g.stroke();
+    }
+  } else if (mode === 'profiles' && ctx) {
+    // The things profiles were assigned from, outlined over the map.
+    g.lineWidth = 1.5;
+    g.strokeStyle = 'rgba(20,20,30,0.45)';
+    for (const z of model.zones ?? []) {
+      trace(z.ring, true);
+      g.stroke();
+    }
+    g.lineWidth = 2.5;
+    g.strokeStyle = 'rgba(255,255,255,0.85)';
+    for (const p of ctx.places) {
+      trace(p.ring, true);
+      g.stroke();
+    }
+  } else {
+    for (const a of model.areas) {
+      trace(a.ring, true);
+      g.fillStyle = ctx ? css(ctx.at(...ctx.interior(a.ring)).value.ground.cover[a.kind]) : AREA_COLOURS[a.kind];
+      g.fill();
+    }
+  }
+
   g.lineCap = g.lineJoin = 'round';
+  if (mode === 'generated') {
+    for (const s of model.streams ?? []) {
+      trace(s.pts, false);
+      g.strokeStyle = css(ctx ? ctx.at(...s.pts[s.pts.length >> 1]).value.ground.stream : 0x6fb0d8);
+      g.lineWidth = s.kind === 'river' ? 6 : s.kind === 'stream' ? 2.2 : 1.2;
+      g.stroke();
+    }
+  }
   const pathStyle: Record<Path['kind'], [string, number]> = { foot: ['#d9cfb8', 2.2], steps: ['#bfb39a', 2.2], cycle: ['#c9b9a0', 2.6] };
   for (const path of model.paths) {
     if (path.level !== 0) continue;
     trace(path.pts, false);
     [g.strokeStyle, g.lineWidth] = pathStyle[path.kind];
+    if (ctx && path.kind !== 'cycle') {
+      const ps = ctx.at(...path.pts[path.pts.length >> 1]).value.ground.path;
+      [g.strokeStyle, g.lineWidth] = [css(path.kind === 'steps' ? ps.colour - 0x111111 : ps.colour), ps.width];
+    }
+    if (mode !== 'generated') {
+      g.strokeStyle = 'rgba(255,255,255,0.5)';
+      g.lineWidth = 1.2;
+    }
     g.stroke();
   }
   return cv;

@@ -1,14 +1,17 @@
-// Street furniture by placement rules: lamps, street trees and traffic signals.
-// Nothing here is in the map. Each rule reads the road's class, width and junctions and decides
-// what a street of that kind would have; positions are measured from the road's own start so
-// they come out the same every time.
+// Street furniture by placement rules: lamps, street trees, signals, benches and bins.
+// Nothing here is in the map. Each rule reads the road's class, width and junctions, and the
+// profile of the place the road runs through, and decides what a street of that kind would have
+// there. Positions are measured from the road's own start so they come out the same every time.
 import type { JunctionShape } from './junctions.ts';
 import { hashOf } from './facade.ts';
 import { type RoadParams, type Track, sampleAt } from './tracks.ts';
-import type { RoadClass } from '../model/types.ts';
+import type { ProfileContext } from '../profile/context.ts';
+import { pick } from '../profile/context.ts';
+import type { Tone } from '../profile/schema.ts';
 
 export interface Prop {
-  kind: 'lamp' | 'mast' | 'signal' | 'tree';
+  /** A kit name: 'lamp', 'mast', 'lamp.heritage', 'signal', a tree kit, 'bench', 'bin'. */
+  kind: string;
   x: number;
   y: number;
   h: number;
@@ -17,17 +20,8 @@ export interface Prop {
   size: number;
   /** 0..1, for colour variation. */
   tint: number;
+  tone?: Tone;
 }
-
-/** Metres between lamps and which sides get them, by class. */
-const LAMPS: Record<RoadClass, { every: number; sides: 'both' | 'alternate' | 'left' }> = {
-  motorway: { every: 55, sides: 'left' },
-  ramp: { every: 42, sides: 'left' },
-  arterial: { every: 34, sides: 'both' },
-  collector: { every: 30, sides: 'alternate' },
-  street: { every: 34, sides: 'alternate' },
-  lane: { every: 40, sides: 'left' },
-};
 
 const unit = (n: number): number => (n % 1000) / 1000;
 
@@ -37,6 +31,7 @@ export function furnishStreets(
   p: RoadParams,
   /** True where a prop would stand inside a building. */
   blocked: (x: number, y: number) => boolean,
+  ctx: ProfileContext,
 ): Prop[] {
   const props: Prop[] = [];
 
@@ -64,33 +59,45 @@ export function furnishStreets(
     if (run < 18) continue;
     const hash = hashOf(t.road.id);
     const major = t.cls === 'motorway' || t.cls === 'ramp';
+    const mid = sampleAt(t, (from + to) / 2);
+    const street = ctx.forRoad(t.road, [mid.x, mid.y]).value.street;
 
     // Lamps: evenly spaced over the run so the first and last sit the same distance from their junctions.
-    const rule = LAMPS[t.cls];
-    const count = Math.max(1, Math.round(run / rule.every));
+    // Motorways keep their masts whatever the place; elsewhere the place decides the lamp, or none.
+    const lampKind = major ? 'mast' : street.lamp === 'heritage' ? 'lamp.heritage' : street.lamp === 'none' ? '' : 'lamp';
     const lampAt: number[] = [];
-    for (let k = 0; k < count; k++) {
-      const s = from + ((k + 0.5) / count) * run;
-      const sides = rule.sides === 'both' ? [1, -1] : rule.sides === 'alternate' ? [k % 2 ? 1 : -1] : [1];
-      for (const side of sides) {
-        // A one-way road keeps its lamps on the left of travel; the divided road's other half lights the other side.
-        const at = spot(t, s, side * 0.55, true);
-        if (!at) continue;
-        props.push({ kind: major ? 'mast' : 'lamp', ...at, size: major ? 1.45 : t.cls === 'lane' ? 0.8 : 1, tint: 0 });
-        lampAt.push(s);
+    if (lampKind) {
+      const every = street.lampEvery[t.cls];
+      const sidesRule = street.lampSides[t.cls];
+      const count = Math.max(1, Math.round(run / every));
+      for (let k = 0; k < count; k++) {
+        const s = from + ((k + 0.5) / count) * run;
+        const sides = sidesRule === 'both' ? [1, -1] : sidesRule === 'alternate' ? [k % 2 ? 1 : -1] : [1];
+        for (const side of sides) {
+          // A one-way road keeps its lamps on the left of travel; the divided road's other half lights the other side.
+          const at = spot(t, s, side * 0.55, true);
+          if (!at) continue;
+          props.push({ kind: lampKind, ...at, size: major ? 1.45 : t.cls === 'lane' ? 0.8 : 1, tint: 0 });
+          lampAt.push(s);
+        }
       }
     }
 
     // Street trees: some streets have none, some a few, some an avenue. The street decides, not the tree.
+    const busy = (s: number) => lampAt.some((l) => Math.abs(l - s) < 3.5);
     if (!major && t.cls !== 'lane' && t.road.footpath) {
       const name = t.road.sections[0].name;
       const character = unit(name ? hashOf(name) : hash);
-      const every = character < 0.3 ? 0 : character < 0.72 ? 17 : 11;
+      const trees = street.trees;
+      const mix = trees.mix;
+      const total = mix.none + mix.some + mix.avenue || 1;
+      const every = character < mix.none / total ? 0 : character < (mix.none + mix.some) / total ? trees.spacing.some : trees.spacing.avenue;
       if (every) {
         const n = Math.floor(run / every);
+        const kit = pick(trees.kit, unit(Math.imul(hash, 2246822519) >>> 4));
         for (let k = 0; k < n; k++) {
           const s = from + ((k + 0.5) / n) * run;
-          if (lampAt.some((l) => Math.abs(l - s) < 3.5)) continue;
+          if (busy(s)) continue;
           for (const side of [1, -1]) {
             const r = unit(Math.imul(hash + k * 7919 + (side > 0 ? 13 : 31), 2654435761) >>> 8);
             // A gap now and then: a driveway, a dead tree, a bus stop.
@@ -98,10 +105,26 @@ export function furnishStreets(
             const at = spot(t, s + (r - 0.5) * 2.5, side * 0.95, false);
             // The crown needs room too: skip where a wall stands right behind the trunk.
             if (!at || blocked(at.x - Math.cos(at.yaw) * 1.6, at.y - Math.sin(at.yaw) * 1.6)) continue;
-            props.push({ kind: 'tree', ...at, size: 0.5 + r * 0.28, tint: unit(Math.imul(hash + k, 40503) >>> 4) });
+            const size = trees.size[0] + (trees.size[1] - trees.size[0]) * ((r - 0.18) / 0.82);
+            props.push({ kind: kit, ...at, size, tint: unit(Math.imul(hash + k, 40503) >>> 4), tone: trees.tone });
           }
         }
       }
+    }
+
+    // Benches and bins: on footpaths of the classes the place says, between the lamps and trees.
+    if (!major && t.road.footpath) {
+      street.extras.forEach((extra, ei) => {
+        if (!extra.classes.includes(t.cls)) return;
+        const n = Math.floor(run / extra.every);
+        for (let k = 0; k < n; k++) {
+          const s = from + ((k + 0.5) / n) * run + (ei * 5 - 2.5);
+          if (busy(s)) continue;
+          const side = (k + ei) % 2 ? 1 : -1;
+          const at = spot(t, s, side * 0.4, false);
+          if (at) props.push({ kind: extra.kit, ...at, size: 1, tint: 0 });
+        }
+      });
     }
   }
 

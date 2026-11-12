@@ -3,23 +3,28 @@
 import * as THREE from 'three';
 import type { Heightfield } from '../model/load.ts';
 import type { Building } from '../model/types.ts';
-import { hashOf, styleFor } from './facade.ts';
+import { hashOf } from './facade.ts';
+import { type Style, styleByName } from './styles.ts';
 
 export interface MassingOptions {
   /** 'grey' is neutral; 'toy' picks from a small saturated palette, ignoring real colours. */
   palette: 'grey' | 'toy';
   /** Multiplier already applied to terrain heights, so building bases follow. */
   hillScale: number;
+  /** The style each building gets, so a box has the colours its facade will have. */
+  styleOf?: (b: Building) => Style;
+  /** A flat colour per building instead, for debug maps. */
+  tint?: (b: Building) => number;
 }
 
-function tone(b: Building, palette: MassingOptions['palette']): THREE.Color {
+function tone(b: Building, palette: MassingOptions['palette'], styleOf: (b: Building) => Style): THREE.Color {
   // A stable pseudo-random choice per building, from its id.
   const hash = hashOf(b.id);
   const r = (hash % 1000) / 1000;
   const c = new THREE.Color();
   if (palette === 'toy') {
     // The same wall colour the facade grammar will pick, so a building keeps its colour as it gains detail.
-    const walls = styleFor(b).walls;
+    const walls = styleOf(b).walls;
     return c.setHex(walls[hash % walls.length]);
   }
   if (b.h > 40) return c.setHSL(0.58, 0.14, 0.62 + r * 0.14);
@@ -38,6 +43,7 @@ export function buildMassing(buildings: Building[], ground: Heightfield, opts: M
   const col: number[] = [];
   const wall: number[] = [];
   const idx: number[] = [];
+  const styleOf = opts.styleOf ?? (() => styleByName('office'));
   for (const b of buildings) {
     const n = b.ring.length;
     if (n < 3) continue;
@@ -47,9 +53,9 @@ export function buildMassing(buildings: Building[], ground: Heightfield, opts: M
     base -= 0.5;
     const floor = b.ground * opts.hillScale;
     const top = floor + b.h;
-    const c = tone(b, opts.palette);
-    const roofs = styleFor(b).roof;
-    const roof = opts.palette === 'toy' ? new THREE.Color(roofs[(hashOf(b.id) >>> 4) % roofs.length]) : c.clone().multiplyScalar(0.82);
+    const c = opts.tint ? new THREE.Color(opts.tint(b)) : tone(b, opts.palette, styleOf);
+    const roofs = styleOf(b).roof;
+    const roof = opts.palette === 'toy' && !opts.tint ? new THREE.Color(roofs[(hashOf(b.id) >>> 4) % roofs.length]) : c.clone().multiplyScalar(0.82);
     const seed = (hashOf(b.id) % 997) / 997;
     for (let i = 0; i < n; i++) {
       const [ax, ay] = b.ring[i];

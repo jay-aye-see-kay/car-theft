@@ -2,7 +2,8 @@
 //   node tools/bake.ts [tile-id]      (run tools/fetch.ts first)
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { pointInRing } from '../src/geo/poly.ts';
-import { interpretAreas, interpretBuildings, interpretPaths, type Measured } from '../src/interpret/features.ts';
+import { existsSync } from 'node:fs';
+import { interpretAreas, interpretBuildings, interpretLandmarks, interpretPaths, interpretStreams, interpretZones, type Measured } from '../src/interpret/features.ts';
 import { parseOsm } from '../src/interpret/osm.ts';
 import { interpretRoads } from '../src/interpret/roads.ts';
 import type { Pt, TileModel } from '../src/model/types.ts';
@@ -63,19 +64,30 @@ const bounds = { x0: -t.sizeX / 2, y0: -t.sizeY / 2, x1: t.sizeX / 2, y1: t.size
 const roads = interpretRoads(osm, bounds, { clusterDist: 20 });
 const buildings = interpretBuildings(osm, bounds, measure, roads.roads);
 const paths = interpretPaths(osm, bounds);
+const zoning = existsSync(`${dir}/zoning.json`)
+  ? interpretZones(JSON.parse(await readFile(`${dir}/zoning.json`, 'utf8')), t.e, t.n, bounds)
+  : { zones: [], report: { 'zones.count': 0 } };
 
 // Heightmap: bare earth at 2 m, sample (0,0) at the south-west corner.
 const cols = t.sizeX / HEIGHT_CELL + 1;
 const rows = t.sizeY / HEIGHT_CELL + 1;
+// LiDAR stops at the water's edge: no data there is sea (or the far side of the survey). It is
+// stored a few metres under sea level so the shore slopes down into it.
+// LiDAR also flattens open sea to 0 m; those count as sea as well.
+const SEABED = -4;
+const isSea = (v: number) => v === NODATA || v <= 0.05;
+let missing = 0;
+for (const v of dem) if (isSea(v)) missing++;
+const sea = missing > dem.length * 0.002;
 let min = Infinity;
 for (const v of dem) if (v !== NODATA && v < min) min = v;
-min = Math.floor(min) - 1;
+min = Math.floor(Math.min(min, sea ? SEABED : min)) - 1;
 const scale = 0.01;
 const heights = new Uint16Array(cols * rows);
 for (let r = 0; r < rows; r++) {
   for (let c = 0; c < cols; c++) {
     const v = dem[(H - 1 - r * HEIGHT_CELL) * W + c * HEIGHT_CELL];
-    heights[r * cols + c] = Math.round(((v === NODATA ? 0 : v) - min) / scale);
+    heights[r * cols + c] = Math.round(((sea && isSea(v) ? SEABED : v === NODATA ? 0 : v) - min) / scale);
   }
 }
 
@@ -90,7 +102,11 @@ const model: TileModel = {
   buildings: buildings.buildings,
   areas: interpretAreas(osm, bounds),
   paths: paths.paths,
-  report: { ...roads.report, ...buildings.report, ...paths.report },
+  streams: interpretStreams(osm, bounds),
+  landmarks: interpretLandmarks(osm, bounds),
+  zones: zoning.zones,
+  sea,
+  report: { ...roads.report, ...buildings.report, ...paths.report, ...zoning.report },
 };
 
 const outDir = `public/tiles/${t.id}`;

@@ -1,0 +1,253 @@
+// Builds a whole tile into the stage: graded terrain, roads, covers, buildings (facades near the
+// view, boxes beyond), street furniture and everything the profiles scatter. Shared by the look,
+// buildings and profiles labs; they differ only in the profile context they pass in.
+import * as THREE from 'three';
+import { buildMassing } from '../gen/buildings.ts';
+import { buildCovers } from '../gen/covers.ts';
+import { buildFacades } from '../gen/facade.ts';
+import { solveJunctions } from '../gen/junctions.ts';
+import { buildRoadMeshes } from '../gen/roadMesh.ts';
+import { type Instance, occupancy, scatter } from '../gen/scatter.ts';
+import { furnishStreets } from '../gen/street.ts';
+import { type MapMode, buildTerrainGeometry, gradeTerrain, paintGround } from '../gen/terrain.ts';
+import { DEFAULT_PARAMS, type Track, buildTrack, solveElevations } from '../gen/tracks.ts';
+import { centroid } from '../geo/poly.ts';
+import { type Kit, kits, toneColour } from '../kit/kits.ts';
+import type { Heightfield } from '../model/load.ts';
+import type { Building, TileModel } from '../model/types.ts';
+import type { ProfileContext } from '../profile/context.ts';
+import type { Stage } from './stage.ts';
+import { type PlacedStamp, buildStamps, carveStamps, placeStamps } from './stamps.ts';
+
+export interface WorldOptions {
+  hillScale: number;
+  trees: boolean;
+  furniture: boolean;
+  /** Build real facades for buildings near the view; the rest stay as boxes with shader windows. */
+  detail: boolean;
+  detailRadius: number;
+  palette: 'grey' | 'toy';
+  map: MapMode;
+}
+
+export interface WorldStats {
+  trees: number;
+  props: number;
+  detail: number;
+  /** Things placed, per kit. */
+  kits: Record<string, number>;
+  ms: Record<string, number>;
+}
+
+const TREE_KITS = new Set(['broadleaf', 'oak', 'plane', 'pohutukawa', 'kauri', 'nikau', 'palm', 'ponga', 'cabbage', 'shrub', 'flax', 'tussock']);
+
+export class World {
+  readonly stage: Stage;
+  readonly model: TileModel;
+  readonly ground: Heightfield;
+  ctx: ProfileContext;
+  opts: WorldOptions;
+  /** Ground as graded for the roads, for driving and picking. */
+  surface: Heightfield;
+  readonly group = new THREE.Group();
+  readonly built = new THREE.Group();
+  readonly focus = new THREE.Vector3(Infinity, 0, 0);
+  stats: WorldStats = { trees: 0, props: 0, detail: 0, kits: {}, ms: {} };
+  /** Everything placed by rules, for the inspector. */
+  placed: Instance[] = [];
+  terrainMesh?: THREE.Mesh;
+  stamps: PlacedStamp[] = [];
+  buildingMeshes: { mesh: THREE.Mesh; buildings: Building[]; facades: boolean }[] = [];
+  private land: Heightfield;
+  private nearRoad: (x: number, y: number) => boolean = () => false;
+  private solid: Building[];
+  private centres: [number, number][];
+  private disposable: { dispose(): void }[] = [];
+
+  constructor(stage: Stage, model: TileModel, ground: Heightfield, ctx: ProfileContext, opts: WorldOptions) {
+    this.stage = stage;
+    this.model = model;
+    this.ground = ground;
+    this.ctx = ctx;
+    this.opts = opts;
+    this.surface = this.land = ground;
+    // Canopies and screens are not buildings; they have their own generator.
+    this.solid = model.buildings.filter((b) => !b.cover);
+    this.centres = this.solid.map((b) => centroid(b.ring));
+    stage.scene.add(this.group, this.built);
+  }
+
+  /** Splits buildings into near (full facades) and far (boxes), around what the camera is looking at. */
+  rebuildBuildings(): void {
+    for (const { mesh } of this.buildingMeshes) mesh.geometry.dispose();
+    this.built.clear();
+    this.buildingMeshes = [];
+    const t = this.stage.controls.target;
+    this.focus.copy(t);
+    const o = this.opts;
+    const near = (i: number) => o.detail && Math.hypot(this.centres[i][0] - t.x, this.centres[i][1] + t.z) < o.detailRadius;
+    const far = this.solid.filter((_, i) => !near(i));
+    const close = o.map === 'generated' ? this.solid.filter((_, i) => near(i)) : [];
+    if (o.map !== 'generated') far.push(...this.solid.filter((_, i) => near(i)));
+    this.stats.detail = close.length;
+    const tint = o.map === 'profiles' ? (b: Building) => this.ctx.forBuilding(b).top.swatch : o.map === 'zoning' ? () => 0xeeeeee : undefined;
+    const styleOf = this.ctx.styleOf;
+    for (const [geometry, material, list, facades] of [
+      [buildMassing(far, this.land, { palette: o.palette, hillScale: o.hillScale, styleOf, tint }), this.stage.mats.buildings, far, false],
+      [buildFacades(close, this.land, { hillScale: o.hillScale, nearRoad: this.nearRoad, styleOf }), this.stage.mats.facades, close, true],
+    ] as const) {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = mesh.receiveShadow = true;
+      this.built.add(mesh);
+      this.buildingMeshes.push({ mesh, buildings: list, facades });
+    }
+  }
+
+  /** Rebuilds the buildings when the view has moved far enough. Call every frame. */
+  follow(): void {
+    const t = this.stage.controls.target;
+    if (this.opts.detail && Math.hypot(t.x - this.focus.x, t.z - this.focus.z) > this.opts.detailRadius * 0.3) this.rebuildBuildings();
+  }
+
+  generate(): void {
+    const ms: Record<string, number> = {};
+    let t0 = performance.now();
+    const lap = (name: string) => {
+      const t = performance.now();
+      ms[name] = Math.round(t - t0);
+      t0 = t;
+    };
+    for (const d of this.disposable) d.dispose();
+    this.disposable = [];
+    const shared = new Set<THREE.BufferGeometry>();
+    for (const k of kits().values()) for (const g of [...k.variants, k.lamp?.head, k.lamp?.pool]) if (g) shared.add(g);
+    for (const child of this.group.children) {
+      const g = (child as THREE.Mesh).geometry;
+      if (g && !shared.has(g)) g.dispose();
+    }
+    this.group.clear();
+    const { model, stage, opts } = this;
+    const mats = stage.mats;
+
+    // Exaggeration happens to the input, so roads, banks and buildings all follow it.
+    const land = this.ground.clone();
+    for (let i = 0; i < land.data.length; i++) land.data[i] *= opts.hillScale;
+    this.land = land;
+
+    const tracks = new Map(model.roads.map((r) => [r.id, buildTrack(r, DEFAULT_PARAMS)]));
+    solveElevations(model, tracks, land, DEFAULT_PARAMS);
+    const junctions = solveJunctions(model, tracks, DEFAULT_PARAMS);
+    const graded = gradeTerrain(land, tracks.values(), junctions, DEFAULT_PARAMS);
+    const roads = buildRoadMeshes(tracks.values(), junctions, DEFAULT_PARAMS, { tintJunctions: false });
+    this.stamps = placeStamps(model, land);
+    carveStamps(this.stamps, graded);
+    this.surface = graded;
+    this.nearRoad = occupancy(model, tracks.values(), 'roads');
+    lap('roads');
+
+    const paint = new THREE.CanvasTexture(paintGround(model, 1.5, this.ctx, opts.map));
+    paint.colorSpace = THREE.SRGBColorSpace;
+    paint.anisotropy = stage.renderer.capabilities.getMaxAnisotropy();
+    this.disposable.push(paint);
+    mats.terrain.map = paint;
+    mats.terrain.needsUpdate = true;
+    lap('ground');
+
+    const add = (geometry: THREE.BufferGeometry, material: THREE.Material, cast: boolean, receive: boolean): THREE.Mesh => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = cast;
+      mesh.receiveShadow = receive;
+      this.group.add(mesh);
+      return mesh;
+    };
+    this.terrainMesh = add(buildTerrainGeometry(graded), mats.terrain, false, true);
+    add(roads.surface, mats.surface, true, true);
+    add(roads.markings, mats.markings, false, false);
+    const covers = buildCovers(model.buildings, graded, tracks.values());
+    add(covers.frame, mats.covers, true, true);
+    add(covers.glass, mats.glass, false, false);
+    if (model.sea) {
+      // The sea: one flat sheet at sea level, under which the LiDAR's flattened water was pushed down.
+      const sea = add(new THREE.PlaneGeometry(model.size.x + 4000, model.size.y + 4000).rotateX(-Math.PI / 2).translate(0, 0.05, 0), mats.water, false, true);
+      sea.renderOrder = 1;
+    }
+    for (const s of buildStamps(model, graded, opts.hillScale, this.stamps)) add(s.geometry, s.material === 'falls' ? mats.falls : mats.covers, false, true);
+    this.rebuildBuildings();
+    lap('buildings');
+
+    const kitCount: Record<string, number> = {};
+    const placed: Instance[] = [];
+    this.stats.props = 0;
+    if (opts.furniture) {
+      const props = furnishStreets(tracks.values(), junctions, DEFAULT_PARAMS, occupancy(model, [], 'buildings'), this.ctx);
+      this.stats.props = props.length;
+      for (const p of props) {
+        if (!opts.trees && TREE_KITS.has(p.kind)) continue;
+        placed.push({ kit: p.kind, x: p.x, y: p.y, h: p.h, size: p.size, tint: p.tint, yaw: p.yaw, lean: 0, leanDir: 0, tone: p.tone, profile: this.ctx.indexAt(p.x, p.y) });
+      }
+    }
+    lap('street');
+    let trees = 0;
+    if (opts.trees) {
+      const found = scatter(model, graded, occupancy(model, tracks.values()), this.ctx);
+      for (const f of found) if (TREE_KITS.has(f.kit)) trees++;
+      placed.push(...found);
+    }
+    this.stats.trees = trees;
+    lap('scatter');
+    for (const p of placed) kitCount[p.kit] = (kitCount[p.kit] ?? 0) + 1;
+    this.placed = placed;
+    this.instance(placed);
+    lap('instancing');
+    this.stats.kits = kitCount;
+    this.stats.ms = ms;
+  }
+
+  /** One instanced mesh per kit shape, with lamp heads and pools alongside. */
+  private instance(placed: Instance[]): void {
+    const library = kits();
+    const groups = new Map<string, { kit: Kit; variant: number; list: Instance[] }>();
+    for (const p of placed) {
+      const kit = library.get(p.kit);
+      if (!kit) continue;
+      const variant = Math.floor(((p.tint * 9.17) % 1) * kit.variants.length);
+      const key = `${p.kit}#${variant}`;
+      let g = groups.get(key);
+      if (!g) groups.set(key, (g = { kit, variant, list: [] }));
+      g.list.push(p);
+    }
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const tilt = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const axis = new THREE.Vector3();
+    const c = new THREE.Color();
+    const mats = this.stage.mats;
+    for (const { kit, variant, list } of groups.values()) {
+      const shapes: [THREE.BufferGeometry, THREE.Material, boolean][] = [[kit.variants[variant], kit.tone ? mats.trees : mats.covers, kit.shadow]];
+      if (kit.lamp && variant === 0) shapes.push([kit.lamp.head, mats.lampHeads, false], [kit.lamp.pool, mats.lampPools, false]);
+      for (const [geometry, material, shadow] of shapes) {
+        const mesh = new THREE.InstancedMesh(geometry, material, list.length);
+        list.forEach((p, i) => {
+          q.setFromAxisAngle(up, p.yaw);
+          if (p.lean) {
+            axis.set(Math.cos(p.leanDir), 0, -Math.sin(p.leanDir));
+            q.premultiply(tilt.setFromAxisAngle(axis, p.lean));
+          }
+          const stretch = 1 + (kit.stretch ?? 0) * (p.tint - 0.5);
+          // Things on a slope sink a little so their downhill side does not float.
+          m.compose(new THREE.Vector3(p.x, p.h - 0.2 * p.size, -p.y), q, new THREE.Vector3(p.size, p.size * stretch, p.size));
+          mesh.setMatrixAt(i, m);
+          if (kit.tone && material === mats.trees) mesh.setColorAt(i, toneColour(p.tone ?? kit.tone, p.tint, c));
+        });
+        mesh.castShadow = shadow;
+        mesh.receiveShadow = shadow;
+        this.group.add(mesh);
+      }
+    }
+  }
+}
+
+export function tracksOf(model: TileModel): Map<string, Track> {
+  return new Map(model.roads.map((r) => [r.id, buildTrack(r, DEFAULT_PARAMS)]));
+}
