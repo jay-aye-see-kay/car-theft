@@ -1,0 +1,21 @@
+{
+  "name": "car-theft-labs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}
