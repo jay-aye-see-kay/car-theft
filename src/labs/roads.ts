@@ -5,6 +5,7 @@ import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 import '../ui/lab.css';
 import { toNztm } from '../geo/nztm.ts';
 import { buildMassing } from '../gen/buildings.ts';
+import { buildCovers } from '../gen/covers.ts';
 import { type JunctionShape, solveJunctions } from '../gen/junctions.ts';
 import { buildRoadMeshes } from '../gen/roadMesh.ts';
 import { buildTerrainGeometry, gradeTerrain, paintGround } from '../gen/terrain.ts';
@@ -42,13 +43,18 @@ const mats = {
   surface: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
   markings: new THREE.MeshBasicMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
   buildings: new THREE.MeshLambertMaterial({ vertexColors: true }),
+  covers: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+  glass: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.42, depthWrite: false }),
 };
 mats.terrain.map!.colorSpace = THREE.SRGBColorSpace;
 mats.terrain.map!.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
 const world = new THREE.Group();
 scene.add(world);
-const buildings = new THREE.Mesh(buildMassing(model.buildings, ground), mats.buildings);
+const buildings = new THREE.Mesh(buildMassing(
+  model.buildings.filter((b) => !b.cover),
+  ground,
+), mats.buildings);
 scene.add(buildings);
 
 let tracks = new Map<string, Track>();
@@ -71,6 +77,8 @@ function generate(): void {
   markings.visible = view.markings;
   markings.name = 'markings';
   world.add(markings);
+  const covers = buildCovers(model.buildings, graded, tracks.values());
+  world.add(new THREE.Mesh(covers.frame, mats.covers), new THREE.Mesh(covers.glass, mats.glass));
 
   const count = (s: JunctionShape['status']) => shapes.filter((j) => j.status === s).length;
   const tapers = model.report['roads.withLaneChanges'];

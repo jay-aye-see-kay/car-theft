@@ -1,6 +1,6 @@
 // Buildings, land areas and footpaths from OpenStreetMap, for the semantic model.
 import { type Rect, centroid, clipRing, inRect, ringArea, simplify, simplifyRing } from '../geo/poly.ts';
-import type { Area, Building, Path, Pt } from '../model/types.ts';
+import type { Area, Building, Path, Pt, Road } from '../model/types.ts';
 import { type OsmData, type Tags, stitchRings } from './osm.ts';
 
 const round = (v: number): number => Math.round(v * 100) / 100;
@@ -37,11 +37,38 @@ export interface Measured {
   ground: number;
 }
 
+/** Roofs lower than this that are tagged as open-sided are canopies; taller ones are the tops of real buildings. */
+const COVER_MAX_HEIGHT = 15;
+
+/** Tests whether a point is on, or right beside, the deck of a bridge. */
+function deckTest(roads: Road[]): (p: Pt) => boolean {
+  const spans: { a: Pt; b: Pt; reach: number }[] = [];
+  for (const r of roads) {
+    let s = 0;
+    for (let i = 1; i < r.pts.length; i++) {
+      const [a, b] = [r.pts[i - 1], r.pts[i]];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const sec = r.sections.find((x) => s + len / 2 <= x.s1) ?? r.sections[r.sections.length - 1];
+      // Half the carriageway, a footpath, and a little slack for how loosely these things are drawn.
+      if (sec.level > 0) spans.push({ a, b, reach: ((sec.lanesF + sec.lanesB) * 3.4) / 2 + 5 });
+      s += len;
+    }
+  }
+  return (p) =>
+    spans.some(({ a, b, reach }) => {
+      const len2 = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 || 1;
+      const u = Math.min(1, Math.max(0, ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / len2));
+      return Math.hypot(p[0] - (a[0] + (b[0] - a[0]) * u), p[1] - (a[1] + (b[1] - a[1]) * u)) < reach;
+    });
+}
+
 export function interpretBuildings(
   data: OsmData,
   bounds: Rect,
   measure: (ring: Pt[]) => Measured,
+  roads: Road[] = [],
 ): { buildings: Building[]; report: Record<string, number> } {
+  const onDeck = deckTest(roads);
   const report: Record<string, number> = {};
   const bump = (k: string) => (report[k] = (report[k] ?? 0) + 1);
   const buildings: Building[] = [];
@@ -61,6 +88,12 @@ export function interpretBuildings(
     else if (levels > 0) [h, hSource] = [levels * 3.3, 'levels'];
     else [h, hSource] = [4, 'default'];
     bump(`buildings.height.${hSource}`);
+    // A roof with no walls is not a building. One beside a bridge deck stands on the bridge: the
+    // height measured for it runs all the way down to whatever the bridge crosses.
+    const open = t.building === 'roof' || t.building === 'shelter' || t.building === 'carport' || t.building === 'canopy' || t.amenity === 'shelter';
+    const deck = open && (onDeck(centroid(o.ring)) || o.ring.some(onDeck));
+    const cover: Building['cover'] = deck ? 'deck' : open && h <= COVER_MAX_HEIGHT ? 'ground' : undefined;
+    if (cover) bump(`buildings.covers.${cover}`);
     buildings.push({
       id: o.id,
       ring: roundRing(simplifyRing(o.ring, 0.2)),
@@ -69,6 +102,7 @@ export function interpretBuildings(
       ground: Math.round(m.ground * 10) / 10,
       kind: t.building === 'yes' ? (t.amenity ?? t.shop ?? t.office ?? 'yes') : t.building,
       name: t.name,
+      cover,
     });
   }
   report['buildings.count'] = buildings.length;

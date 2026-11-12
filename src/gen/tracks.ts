@@ -268,5 +268,50 @@ export function solveElevations(model: TileModel, tracks: Map<string, Track>, gr
       for (let i = 1; i < t.n - 1; i++) t.h[i] = 0.25 * tmp[i - 1] + 0.5 * tmp[i] + 0.25 * tmp[i + 1];
     }
   }
+  markSpans(all);
   return jh;
+}
+
+/** Headroom that makes one road count as passing over another rather than meeting it. */
+export const CLEARANCE = 4;
+
+/**
+ * The map tags a bridge only between its abutments, which is often shorter than the gap it has to
+ * clear. Wherever a road on the ground runs well above another road's carriageway it must be on a
+ * structure, whatever the tags say, so those stretches become deck too.
+ */
+function markSpans(all: Track[]): void {
+  const CELL = 16;
+  const grid = new Map<number, { t: Track; i: number }[]>();
+  const key = (x: number, y: number): number => Math.floor(x / CELL) * 8192 + Math.floor(y / CELL);
+  for (const t of all) {
+    for (let i = 0; i < t.n; i++) {
+      if (t.level[i] !== 0) continue;
+      const k = key(t.x[i], t.y[i]);
+      let list = grid.get(k);
+      if (!list) grid.set(k, (list = []));
+      list.push({ t, i });
+    }
+  }
+  const raise: [Track, number][] = [];
+  for (const t of all) {
+    for (let i = 0; i < t.n; i++) {
+      if (t.level[i] !== 0) continue;
+      let over = false;
+      for (let dx = -CELL; dx <= CELL && !over; dx += CELL) {
+        for (let dy = -CELL; dy <= CELL && !over; dy += CELL) {
+          for (const o of grid.get(key(t.x[i] + dx, t.y[i] + dy)) ?? []) {
+            if (o.t === t || o.t.h[o.i] > t.h[i] - CLEARANCE) continue;
+            const reach = halfWidth(o.t, o.i) + halfWidth(t, i) * 0.6 + 1.5;
+            if (Math.hypot(o.t.x[o.i] - t.x[i], o.t.y[o.i] - t.y[i]) < reach) {
+              over = true;
+              break;
+            }
+          }
+        }
+      }
+      if (over) raise.push([t, i]);
+    }
+  }
+  for (const [t, i] of raise) t.level[i] = 1;
 }

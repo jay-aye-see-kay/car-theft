@@ -61,7 +61,7 @@ const osm = parseOsm(JSON.parse(await readFile(`${dir}/osm.json`, 'utf8')), t.e,
 const bounds = { x0: -t.sizeX / 2, y0: -t.sizeY / 2, x1: t.sizeX / 2, y1: t.sizeY / 2 };
 
 const roads = interpretRoads(osm, bounds, { clusterDist: 20 });
-const buildings = interpretBuildings(osm, bounds, measure);
+const buildings = interpretBuildings(osm, bounds, measure, roads.roads);
 const paths = interpretPaths(osm, bounds);
 
 // Heightmap: bare earth at 2 m, sample (0,0) at the south-west corner.

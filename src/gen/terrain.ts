@@ -84,10 +84,14 @@ export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junct
           wsum += w;
         }
         const k = r * cols + c;
-        // Only where the ground is on this junction's level; a junction on a viaduct has open air under it.
-        if (Math.abs(sum / wsum - out.data[k]) < 4 || weight[k] > 0) {
+        const h = sum / wsum - SINK;
+        if (weight[k] > 0 && target[k] < h - 1.5) {
+          // Another road's bed runs underneath: this part of the junction is on a structure.
+          ceiling[k] = Math.min(ceiling[k], h - 0.6);
+        } else if (Math.abs(h - out.data[k]) < 4 || weight[k] > 0) {
+          // Only where the ground is on this junction's level; a junction on a viaduct has open air under it.
           weight[k] = 1;
-          target[k] = sum / wsum - SINK;
+          target[k] = h;
         }
       }
     }

@@ -7,6 +7,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import '../ui/lab.css';
 import { toNztm } from '../geo/nztm.ts';
 import { buildMassing } from '../gen/buildings.ts';
+import { buildCovers } from '../gen/covers.ts';
 import { buildFacades } from '../gen/facade.ts';
 import { solveJunctions } from '../gen/junctions.ts';
 import { buildRoadMeshes } from '../gen/roadMesh.ts';
@@ -156,9 +157,11 @@ const mats = {
   facades: new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide }),
   trees: new THREE.MeshToonMaterial({ vertexColors: true }),
   car: new THREE.MeshToonMaterial({ vertexColors: true }),
+  covers: new THREE.MeshToonMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+  glass: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.42, depthWrite: false }),
   markings: new THREE.MeshBasicMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
 };
-const toons = [mats.terrain, mats.surface, mats.buildings, mats.facades, mats.trees, mats.car];
+const toons = [mats.terrain, mats.surface, mats.buildings, mats.facades, mats.trees, mats.car, mats.covers];
 
 // Windows are drawn by the shader from the wall's bay grid: bays across, floors up. The grid
 // comes from the building's real width and height, which is what an interior would also use.
@@ -233,7 +236,9 @@ const built = new THREE.Group();
 scene.add(built);
 const focus = new THREE.Vector3(Infinity, 0, 0);
 let detailCount = 0;
-const centres = model.buildings.map((b) => centroid(b.ring));
+// Canopies and screens are not buildings; they have their own generator.
+const solid = model.buildings.filter((b) => !b.cover);
+const centres = solid.map((b) => centroid(b.ring));
 
 /** Splits buildings into near (full facades) and far (boxes), around what the camera is looking at. */
 function rebuildBuildings(): void {
@@ -241,8 +246,8 @@ function rebuildBuildings(): void {
   built.clear();
   focus.copy(controls.target);
   const near = (i: number) => state.detail && Math.hypot(centres[i][0] - focus.x, centres[i][1] + focus.z) < state.detailRadius;
-  const far = model.buildings.filter((_, i) => !near(i));
-  const close = model.buildings.filter((_, i) => near(i));
+  const far = solid.filter((_, i) => !near(i));
+  const close = solid.filter((_, i) => near(i));
   detailCount = close.length;
   for (const [geometry, material] of [
     [buildMassing(far, land, { palette: look.palette, hillScale: state.hillScale }), mats.buildings],
@@ -281,6 +286,9 @@ function generate(): void {
   add(buildTerrainGeometry(graded), mats.terrain, false, true);
   add(roads.surface, mats.surface, true, true);
   add(roads.markings, mats.markings, false, false);
+  const covers = buildCovers(model.buildings, graded, tracks.values());
+  add(covers.frame, mats.covers, true, true);
+  add(covers.glass, mats.glass, false, false);
   rebuildBuildings();
 
   if (look.trees) {
@@ -461,14 +469,15 @@ function setDriving(on: boolean): void {
   renderHud();
 }
 
-function lookAt(lat: number, lon: number, distance: number, bearing: number): void {
+function lookAt(lat: number, lon: number, distance: number, bearing: number, pitch = 35): void {
   const [e, n] = toNztm(lat, lon);
   const x = e - model.origin.e;
   const y = n - model.origin.n;
   const h = surfaceAt.at(x, y);
   const b = (bearing * Math.PI) / 180;
   controls.target.set(x, h, -y);
-  camera.position.set(x - Math.sin(b) * distance * 0.8, h + distance * 0.57, -y + Math.cos(b) * distance * 0.8);
+  const flat = Math.cos((pitch * Math.PI) / 180) * distance;
+  camera.position.set(x - Math.sin(b) * flat, h + Math.sin((pitch * Math.PI) / 180) * distance, -y + Math.cos(b) * flat);
   controls.update();
 }
 const PLACES: [string, number, number, number, number][] = [
@@ -483,7 +492,7 @@ const PLACES: [string, number, number, number, number][] = [
 applyLook();
 generate();
 const at = query.get('at')?.split(',').map(Number);
-if (at?.length === 4 && at.every(Number.isFinite)) lookAt(at[0], at[1], at[2], at[3]);
+if (at && at.length >= 4 && at.every(Number.isFinite)) lookAt(at[0], at[1], at[2], at[3], at[4]);
 else if (lab === 'buildings') lookAt(-36.8578, 174.7617, 95, 75);
 else lookAt(...(PLACES[0].slice(1) as [number, number, number, number]));
 if (query.has('drive')) setDriving(true);

@@ -46,6 +46,12 @@ export interface Building {
   ground: number;
   kind: string;
   name?: string;
+  /**
+   * Set when this is an open-sided cover (a canopy, shelter or screen) rather than a walled building:
+   * 'ground' if it stands on the ground, 'deck' if it stands on a bridge, where `h` and `ground`
+   * were measured to the land far below and mean nothing.
+   */
+  cover?: 'ground' | 'deck';
 }
 
 export interface Area {
