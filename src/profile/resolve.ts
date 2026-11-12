@@ -59,6 +59,11 @@ function apply(target: Record<string, unknown>, patch: Record<string, unknown>, 
 
 const cache = new Map<string, ResolvedProfile>();
 
+/** Forgets every resolved profile, after a profile in the library has been edited. */
+export function clearResolved(): void {
+  cache.clear();
+}
+
 export function layerKey(stack: Layer[]): string {
   return stack.map((l) => `${l.level}:${l.profile ?? ''}:${l.patch ? l.source : ''}`).join('|');
 }
