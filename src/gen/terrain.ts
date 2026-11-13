@@ -93,6 +93,15 @@ function cutUnderpasses(out: Heightfield, bed: Float32Array, ceiling: Float32Arr
   }
 }
 
+/** Offsets to look around a point under the paving: a ring at 3 m and a cross at 6 m. */
+const AROUND: [number, number][] = [
+  ...[0, 1, 2, 3, 4, 5, 6, 7].map((k): [number, number] => [Math.cos((k * Math.PI) / 4) * 3, Math.sin((k * Math.PI) / 4) * 3]),
+  [6, 0],
+  [-6, 0],
+  [0, 6],
+  [0, -6],
+];
+
 const smoothstep = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 /**
@@ -186,6 +195,7 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
   }
 
   // Under the pavement: never above the road it sits a kerb over.
+  const paved = new Uint8Array(cols * rows);
   for (const piece of [...pavement.paved, ...pavement.sealed]) {
     const ring: Pt[] = piece.outer.pts.map((q) => [q.x, q.y]);
     const holes: Pt[][] = piece.holes.map((h) => h.pts.map((q) => [q.x, q.y]));
@@ -196,9 +206,14 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
         const [px, py] = [x0 + c * cell, y0 + r * cell];
         if (!pointInRing(px, py, ring) || holes.some((h) => pointInRing(px, py, h))) continue;
         const k = r * cols + c;
-        const h = pavement.surfaceAt(px, py) - SINK;
+        // The paving spans between roads that may sit at different heights, in flat facets of its own: the
+        // ground stays under the lowest road surface nearby, so it cannot come up through any of them.
+        let h = pavement.surfaceAt(px, py);
+        for (const [dx, dy] of AROUND) h = Math.min(h, pavement.surfaceAt(px + dx, py + dy));
+        h -= SINK;
         target[k] = weight[k] >= 1 ? Math.min(target[k], h) : h;
         weight[k] = 1;
+        paved[k] = 1;
       }
     }
   }
@@ -206,6 +221,18 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
   for (let k = 0; k < weight.length; k++) {
     if (weight[k] > 0) out.data[k] += (target[k] - out.data[k]) * weight[k];
     if (out.data[k] > ceiling[k]) out.data[k] = ceiling[k];
+  }
+  // The ground beside the paving starts level with it and climbs from there: a bank that began under
+  // the paving's edge would come up through it.
+  const before = out.data.slice();
+  for (let r = 1; r < rows - 1; r++) {
+    for (let c = 1; c < cols - 1; c++) {
+      const k = r * cols + c;
+      if (paved[k]) continue;
+      for (const n of [k - 1, k + 1, k - cols, k + cols, k - cols - 1, k - cols + 1, k + cols - 1, k + cols + 1]) {
+        if (paved[n] && before[n] < out.data[k]) out.data[k] = before[n];
+      }
+    }
   }
   cutUnderpasses(out, weight, ceiling, all, paths);
   return out;

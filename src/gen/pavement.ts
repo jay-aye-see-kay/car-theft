@@ -44,6 +44,10 @@ const CHUNK = 8;
 /** How far a footpath runs on past the end of a road that carries straight on into another. */
 const SEAM_RUN = 4;
 /** The pavement is solved in squares this size, each looking this far beyond its edges. */
+/** Bare ground between two carriageways narrower than twice this is paved as a median. */
+const GAP = 3;
+/** ...unless one carriageway is this much higher than the other, where the ground between is a bank. */
+const GAP_STEP = 1.5;
 const CELL = 100;
 const MARGIN = 12;
 
@@ -217,7 +221,7 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
   const walkBoxes = walk.map(box);
   const islandBoxes = islands.map(box);
   const cells = new Set<number>();
-  for (const [x0, y0, x1, y1] of walkBoxes)
+  for (const [x0, y0, x1, y1] of [...walkBoxes, ...roadBoxes])
     for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) for (let cy = Math.floor(y0 / CELL); cy <= Math.floor(y1 / CELL); cy++) cells.add(cx * 65536 + cy);
 
   const edges = new RingIndex();
@@ -231,14 +235,32 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
     const [x0, y0, x1, y1] = [cell[0] - MARGIN, cell[1] - MARGIN, cell[2] + MARGIN, cell[3] + MARGIN];
     const hits = (b: [number, number, number, number]) => b[0] <= x1 && b[2] >= x0 && b[1] <= y1 && b[3] >= y0;
     const walkHere = walk.filter((_, i) => hits(walkBoxes[i]));
-    if (!walkHere.length) continue;
     const kept = Region.of(islands.filter((_, i) => hits(islandBoxes[i])));
     const roadway = Region.of(road.filter((_, i) => !isJunction[i] && hits(roadBoxes[i]))).union(
       Region.of(road.filter((_, i) => isJunction[i] && hits(roadBoxes[i])))
         .union()
         .minus(kept),
     );
-    const raw = Region.of(walkHere).union().minus(roadway);
+    if (roadway.empty) continue;
+    // Narrow strips of ground shut in between carriageways, where the two sides are near enough level.
+    const level = (sh: Shape): boolean => {
+      let [n, steep] = [0, 0];
+      sh.outer.forEach((a, i) => {
+        const b = sh.outer[(i + 1) % sh.outer.length];
+        const d = Math.hypot(b.x - a.x, b.y - a.y);
+        if (d < 0.5) return;
+        // The filled side is on the left of each edge: look across the strip from here.
+        const [nx, ny] = [-(b.y - a.y) / d, (b.x - a.x) / d];
+        const [mx, my] = [(a.x + b.x) / 2, (a.y + b.y) / 2];
+        n += d;
+        if (Math.abs(heights.at(mx - nx * 0.5, my - ny * 0.5) - heights.at(mx + nx * 2 * GAP, my + ny * 2 * GAP)) > GAP_STEP) steep += d;
+      });
+      return steep < n * 0.25;
+    };
+    const medians = roadway.close(GAP).minus(roadway).open(0.6).shapes(4).filter(level);
+    const raw = Region.of([...walkHere, ...medians.flatMap((sh) => [sh.outer])])
+      .union()
+      .minus(roadway);
     const paved = raw.open(FLUSH);
     const square = Region.of([
       [
