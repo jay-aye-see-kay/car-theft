@@ -64,8 +64,8 @@ export class Region {
   }
 
   /** Grown then shrunk back: every gap narrower than twice `d` is filled, and inside corners take that radius. */
-  close(d: number): Region {
-    return this.offset(d).offset(-d);
+  close(d: number, round = true): Region {
+    return new Region(C.Clipper.CleanPolygons(this.paths, 0.03 * SCALE)).offset(d, round).offset(-d, round);
   }
 
   /** True if the point is covered. */

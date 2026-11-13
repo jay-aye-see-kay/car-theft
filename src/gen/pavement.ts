@@ -263,16 +263,21 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
       });
       return steep < n * 0.25;
     };
-    const medians = roadway.close(GAP).minus(roadway).open(0.6).shapes(4).filter((sh) => level(sh));
+    // Growing the whole roadway is the dear step, so it is done once, at the wider reach, and the
+    // narrower gaps are picked out of that answer.
+    const gaps = roadway.close(BANK_GAP, false).minus(roadway);
+    const medians = gaps
+      .minus(gaps.open(GAP))
+      .open(0.6)
+      .shapes(4)
+      .filter((sh) => level(sh));
     const raw = Region.of([...walkHere, ...medians.flatMap((sh) => [sh.outer])])
       .union()
       .minus(roadway);
     const paved = raw.open(FLUSH);
     // Wider strips between carriageways at different heights: an even bank from one road's edge to the
     // other's, laid as a surface of its own because the ground's grid is too coarse to shape one.
-    const slopes = roadway
-      .close(BANK_GAP)
-      .minus(roadway)
+    const slopes = gaps
       .open(0.6)
       .shapes(4)
       .filter((sh) => !level(sh, [GAP, 2 * GAP, 2 * BANK_GAP]));
