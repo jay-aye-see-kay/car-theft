@@ -27,6 +27,44 @@ const TUCK = 0.3;
 
 const STATUS_TINT: Record<JunctionStatus, RGB> = { ok: hex(0x3d8f5f), squeezed: hex(0xd9862b), merge: hex(0xb04bd1) };
 
+/** Reach of the plane fitted round a point of a polygon, for lighting it. */
+const FIT = 6;
+
+/**
+ * The normal of a plane fitted to a polygon's points near `p`, nearer ones counting more. A polygon
+ * triangulated from its outline alone is cut into long thin triangles at slightly different tilts;
+ * lit by those, it shows dark wedges, where lit by this its shading follows the lie of the surface.
+ */
+function fitted(pts: P3[], p: P3): [number, number, number] {
+  // Weighted least squares for h = a·dx + b·dy + c.
+  let [sw, sx, sy, sh, sxx, sxy, syy, sxh, syh] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (const q of pts) {
+    const [dx, dy] = [q.x - p.x, q.y - p.y];
+    const w = Math.exp(-(dx * dx + dy * dy) / (FIT * FIT));
+    if (w < 1e-3) continue;
+    sw += w;
+    sx += w * dx;
+    sy += w * dy;
+    sh += w * q.h;
+    sxx += w * dx * dx;
+    sxy += w * dx * dy;
+    syy += w * dy * dy;
+    sxh += w * dx * q.h;
+    syh += w * dy * q.h;
+  }
+  // Centred sums, so the fit needs only the slope.
+  const [cxx, cxy, cyy] = [sxx - (sx * sx) / sw, sxy - (sx * sy) / sw, syy - (sy * sy) / sw];
+  const [cxh, cyh] = [sxh - (sx * sh) / sw, syh - (sy * sh) / sw];
+  const det = cxx * cyy - cxy * cxy;
+  // Points nearly in a line say nothing about the slope across them: lit as level.
+  if (det < 1e-6 * (cxx + cyy) ** 2 || det < 1e-3) return [0, 1, 0];
+  const a = (cxh * cyy - cyh * cxy) / det;
+  const b = (cyh * cxx - cxh * cxy) / det;
+  // Tile (x, y, h) to Three.js (x, h, -y).
+  const n = Math.hypot(a, b, 1);
+  return [-a / n, 1 / n, b / n];
+}
+
 /** Collects triangles with per-vertex colour. Tile coordinates in, Three.js coordinates out (y up, z south). */
 class Builder {
   private pos: number[] = [];
@@ -34,6 +72,8 @@ class Builder {
   private idx: number[] = [];
   /** Vertices lit as if level, whatever their triangles' tilt. */
   private level: number[] = [];
+  /** Vertices lit by a normal of their own, in Three.js axes. */
+  private lit = new Map<number, [number, number, number]>();
 
   vertex(p: P3, c: RGB): number {
     this.pos.push(p.x, p.h, -p.y);
@@ -59,11 +99,13 @@ class Builder {
    * A polygon with holes. `level` lights it as flat ground: paving is cut into long thin triangles
    * between edges at slightly different heights, and lit by their own tilt they show as streaks.
    */
-  polygon(ring: P3[], c: RGB, holes: P3[][] = [], level = false): void {
+  polygon(ring: P3[], c: RGB, holes: P3[][] = [], level = false, smooth = false): void {
     const base = this.pos.length / 3;
-    for (const p of [ring, ...holes].flat()) {
+    const all = [ring, ...holes].flat();
+    for (const p of all) {
       const v = this.vertex(p, c);
       if (level) this.level.push(v);
+      if (smooth) this.lit.set(v, fitted(all, p));
     }
     const v2 = (r: P3[]) => r.map((p) => new THREE.Vector2(p.x, p.y));
     const faces = THREE.ShapeUtils.triangulateShape(v2(ring), holes.map(v2));
@@ -78,6 +120,7 @@ class Builder {
     g.computeVertexNormals();
     const normal = g.getAttribute('normal');
     for (const v of this.level) normal.setXYZ(v, 0, 1, 0);
+    for (const [v, n] of this.lit) normal.setXYZ(v, ...n);
     return g;
   }
 }
@@ -178,7 +221,7 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
     const fast = j.mouths.length > 0 && j.mouths.every((m) => m.track.cls === 'motorway' || m.track.cls === 'ramp');
     const down = (r: P3[]) => r.map((pt) => ({ ...pt, h: pt.h - DECK_DEPTH }));
     for (const piece of j.pieces) {
-      b.polygon(piece.outer, opts.tintJunctions ? STATUS_TINT[j.status] : fast ? C.motorway : C.junction, piece.holes);
+      b.polygon(piece.outer, opts.tintJunctions ? STATUS_TINT[j.status] : fast ? C.motorway : C.junction, piece.holes, false, true);
       if (j.deck) b.polygon(down(piece.outer), C.structure, piece.holes.map(down));
     }
     for (const f of j.fillets) {
