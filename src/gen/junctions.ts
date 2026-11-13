@@ -404,6 +404,29 @@ function outline(body: Body, arms: Arm[], mouths: Mouth[]): Pick<JunctionShape, 
   return { pieces, islands, fillets };
 }
 
+/**
+ * A lane was cut back to clear the roads it meets, but the intersection between those roads is wider
+ * than any one of them: the lane is cut back further, until it is clear of that surface and of the
+ * footpath round it too.
+ */
+function clearLanes(plan: JunctionPlan, arms: Arm[], pieces: Piece[], p: RoadParams): void {
+  const lanes = plan.arms.filter((a) => a.minor);
+  if (!lanes.length || !pieces.length) return;
+  const beside = arms.some((a) => a.t.road.footpath) ? p.footpathWidth + 0.2 : 0.2;
+  const keepOut = Region.of(pieces.map((pc) => pc.outer)).offset(beside, false);
+  for (const a of lanes) {
+    const t = a.t;
+    const limit = Math.min(p.maxCut, t.length * 0.45);
+    let cut = a.end === 'a' ? t.cutA : t.cutB;
+    for (; cut < limit; cut += 0.5) {
+      const c = sampleAt(t, a.end === 'a' ? cut : t.length - cut);
+      if (!keepOut.contains(c.x, c.y)) break;
+    }
+    if (a.end === 'a') t.cutA = cut;
+    else t.cutB = cut;
+  }
+}
+
 export function solveJunctions(plans: Map<string, JunctionPlan>, p: RoadParams): JunctionShape[] {
   const shapes: JunctionShape[] = [];
   for (const plan of plans.values()) {
@@ -494,6 +517,7 @@ export function solveJunctions(plans: Map<string, JunctionPlan>, p: RoadParams):
     const free = rightOfWay(arms, plan.groups);
     if (!plan.seam) {
       const shape = outline(body!, arms, mouths);
+      clearLanes(plan, arms, shape.pieces, p);
       shapes.push({
         id: j.id,
         pieces: shape.pieces,
@@ -554,7 +578,17 @@ export function solveJunctions(plans: Map<string, JunctionPlan>, p: RoadParams):
     // in a knot. A seam's arms lie side by side, so the hull of the same points is a sound surface:
     // anything it adds is the wedge between mouths that were already touching.
     let pieces: Piece[] = [{ outer: ring, holes: [] }];
-    if (!isSimple(ring)) pieces = [{ outer: hull(ring), holes: [] }];
+    if (!isSimple(ring)) {
+      const outer = hull(ring);
+      pieces = [{ outer, holes: [] }];
+      // The kerbs follow the surface that was laid, not the curves that tangled.
+      const kept = (q: P3): boolean => outer.some((o) => Math.abs(o.x - q.x) < 1e-6 && Math.abs(o.y - q.y) < 1e-6);
+      for (const f of fillets) {
+        const on = f.pts.filter(kept);
+        if (on.length >= 2 && kept(f.pts[0]) && kept(f.pts[f.pts.length - 1])) f.pts = on;
+      }
+    }
+    clearLanes(plan, arms, pieces, p);
     // Short roads folded into this node when the map's nodes were merged: a driveway that reached the
     // street through one still needs its surface, from the back of the street's footpath to where it led.
     const links = linkRegion(j, p);
