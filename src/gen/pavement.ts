@@ -31,6 +31,8 @@ export interface Pavement {
   paved: PavePiece[];
   /** Slivers too thin to stand as kerbed paving, sealed flush with the road instead. */
   sealed: PavePiece[];
+  /** Sloping ground between two carriageways at different heights, flush with each at its edge. */
+  banks: PavePiece[];
   /** Height of the road surface nearest a point, which the paving sits a kerb above. */
   surfaceAt(x: number, y: number): number;
 }
@@ -48,6 +50,8 @@ const SEAM_RUN = 4;
 const GAP = 3;
 /** ...unless one carriageway is this much higher than the other, where the ground between is a bank. */
 const GAP_STEP = 1.5;
+/** Ground between two carriageways at different heights is shaped as a bank up to twice this wide. */
+const BANK_GAP = 5;
 const CELL = 100;
 const MARGIN = 12;
 
@@ -228,6 +232,7 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
   for (const r of road) edges.add(r);
   const pavedShapes: { s: Shape; cell: [number, number, number, number] }[] = [];
   const sealedShapes: { s: Shape; cell: [number, number, number, number] }[] = [];
+  const bankShapes: { s: Shape; cell: [number, number, number, number] }[] = [];
   for (const key of cells) {
     const cx = Math.round(key / 65536);
     const cy = key - cx * 65536;
@@ -243,7 +248,7 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
     );
     if (roadway.empty) continue;
     // Narrow strips of ground shut in between carriageways, where the two sides are near enough level.
-    const level = (sh: Shape): boolean => {
+    const level = (sh: Shape, reaches = [2 * GAP]): boolean => {
       let [n, steep] = [0, 0];
       sh.outer.forEach((a, i) => {
         const b = sh.outer[(i + 1) % sh.outer.length];
@@ -253,15 +258,27 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
         const [nx, ny] = [-(b.y - a.y) / d, (b.x - a.x) / d];
         const [mx, my] = [(a.x + b.x) / 2, (a.y + b.y) / 2];
         n += d;
-        if (Math.abs(heights.at(mx - nx * 0.5, my - ny * 0.5) - heights.at(mx + nx * 2 * GAP, my + ny * 2 * GAP)) > GAP_STEP) steep += d;
+        const here = heights.at(mx - nx * 0.5, my - ny * 0.5);
+        if (reaches.some((r) => Math.abs(here - heights.at(mx + nx * r, my + ny * r)) > GAP_STEP)) steep += d;
       });
       return steep < n * 0.25;
     };
-    const medians = roadway.close(GAP).minus(roadway).open(0.6).shapes(4).filter(level);
+    const medians = roadway.close(GAP).minus(roadway).open(0.6).shapes(4).filter((sh) => level(sh));
     const raw = Region.of([...walkHere, ...medians.flatMap((sh) => [sh.outer])])
       .union()
       .minus(roadway);
     const paved = raw.open(FLUSH);
+    // Wider strips between carriageways at different heights: an even bank from one road's edge to the
+    // other's, laid as a surface of its own because the ground's grid is too coarse to shape one.
+    const slopes = roadway
+      .close(BANK_GAP)
+      .minus(roadway)
+      .open(0.6)
+      .shapes(4)
+      .filter((sh) => !level(sh, [GAP, 2 * GAP, 2 * BANK_GAP]));
+    const bank = Region.of(slopes.map((sh) => sh.outer))
+      .minus(roadway)
+      .minus(raw);
     const square = Region.of([
       [
         { x: cell[0], y: cell[1] },
@@ -272,6 +289,7 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
     ]);
     for (const s of paved.within(square).shapes(0.05)) pavedShapes.push({ s, cell });
     for (const s of raw.minus(paved).within(square).shapes(0.05)) sealedShapes.push({ s, cell });
+    for (const s of bank.within(square).shapes(1)) bankShapes.push({ s, cell });
   }
   for (const { s } of sealedShapes) edges.add(s.outer);
 
@@ -304,6 +322,7 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
   return {
     paved: pavedShapes.map((s) => lay(s, true)),
     sealed: sealedShapes.map((s) => lay(s, false)),
+    banks: bankShapes.map((s) => lay(s, false)),
     surfaceAt,
   };
 }

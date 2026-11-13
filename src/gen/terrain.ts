@@ -102,6 +102,9 @@ const AROUND: [number, number][] = [
   [0, -6],
 ];
 
+/** How far past a carriageway's edge the ground stays level with it. */
+const SHELF = 2.5;
+
 const smoothstep = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 /**
@@ -117,13 +120,20 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
   const target = new Float32Array(cols * rows);
   const ceiling = new Float32Array(cols * rows).fill(Infinity);
   const all = [...tracks];
+  // Between roads the ground is a blend of their heights, each counting for more the nearer it is, so
+  // the bank from one road down to another is a slope rather than a step wherever the nearer road
+  // changes. Under a carriageway and for a little way beside it, the lowest road there wins outright.
+  const sumW = new Float32Array(cols * rows);
+  const sumWH = new Float32Array(cols * rows);
+  const under = new Float32Array(cols * rows).fill(Infinity);
 
   for (const t of all) {
     const extra = (t.road.footpath ? p.footpathWidth : 0) + 1.2;
     for (let i = 0; i < t.n - 1; i++) {
       if (t.level[i] < 0 || t.level[i + 1] < 0) continue;
       const elevated = t.level[i] > 0 || t.level[i + 1] > 0;
-      const core = Math.max(halfWidth(t, i), halfWidth(t, i + 1)) + extra;
+      const hw = Math.max(halfWidth(t, i), halfWidth(t, i + 1));
+      const core = hw + extra;
       const reach = core + p.gradeBlend;
       const [ax, ay, bx, by] = [t.x[i], t.y[i], t.x[i + 1], t.y[i + 1]];
       const c0 = Math.max(0, Math.floor((Math.min(ax, bx) - reach - x0) / cell));
@@ -144,18 +154,23 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
           if (elevated) {
             // A deck: the ground only needs to stay out of its way.
             if (d <= core) ceiling[k] = Math.min(ceiling[k], h - 0.6);
-          } else if (w >= 1 && weight[k] >= 1) {
+          } else {
+            if (w > weight[k]) weight[k] = w;
+            // Level for a little way past the edge, further than one cell of the ground's grid, so the
+            // slope never starts under the carriageway.
+            const near = 1 / (Math.max(0, d - hw - SHELF) + 0.25) ** 2;
+            sumW[k] += near;
+            sumWH[k] += near * h;
             // Two road beds overlap (the halves of a divided road on a cross slope): the lower one
             // wins, so the ground can never stand above either surface.
-            target[k] = Math.min(target[k], h);
-          } else if (w > weight[k]) {
-            weight[k] = w;
-            target[k] = h;
+            if (d <= hw + SHELF) under[k] = Math.min(under[k], h);
           }
         }
       }
     }
   }
+
+  for (let k = 0; k < weight.length; k++) if (sumW[k] > 0) target[k] = under[k] < Infinity ? under[k] : sumWH[k] / sumW[k];
 
   // Junction interiors: flat to the junction's own surface.
   for (const j of junctions) for (const piece of j.pieces) {
@@ -196,7 +211,7 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
 
   // Under the pavement: never above the road it sits a kerb over.
   const paved = new Uint8Array(cols * rows);
-  for (const piece of [...pavement.paved, ...pavement.sealed]) {
+  for (const piece of [...pavement.paved, ...pavement.sealed, ...pavement.banks]) {
     const ring: Pt[] = piece.outer.pts.map((q) => [q.x, q.y]);
     const holes: Pt[][] = piece.holes.map((h) => h.pts.map((q) => [q.x, q.y]));
     let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];

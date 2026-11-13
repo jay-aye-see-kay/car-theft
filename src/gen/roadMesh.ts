@@ -183,6 +183,7 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
 
   for (const piece of net.pavement.paved) pave(b, piece, kh);
   for (const piece of net.pavement.sealed) b.polygon(piece.outer.pts, C.asphalt, piece.holes.map((h) => h.pts));
+  for (const piece of net.pavement.banks) b.polygon(piece.outer.pts, C.bank, piece.holes.map((h) => h.pts));
 
   return { surface: b.build(), markings: m.build() };
 }
