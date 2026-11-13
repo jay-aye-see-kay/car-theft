@@ -10,6 +10,8 @@ interface Outline {
   id: string;
   tags: Tags;
   ring: Pt[];
+  /** For one ring of a many-part outline: its area as a share of the largest part's. */
+  share: number;
 }
 
 /** Every closed outline carrying tags: closed ways, plus the outer rings of multipolygons. */
@@ -21,12 +23,14 @@ function outlines(data: OsmData): Outline[] {
   };
   const found: Outline[] = [];
   for (const w of data.ways.values()) {
-    if (w.nodes.length > 3 && w.nodes[0] === w.nodes[w.nodes.length - 1]) found.push({ id: `w${w.id}`, tags: w.tags, ring: toRing(w.nodes) });
+    if (w.nodes.length > 3 && w.nodes[0] === w.nodes[w.nodes.length - 1]) found.push({ id: `w${w.id}`, tags: w.tags, ring: toRing(w.nodes), share: 1 });
   }
   for (const r of data.relations) {
     // Tags may sit on the relation or, in older mapping, on its outer way.
     const tags = Object.keys(r.tags).length > 1 ? r.tags : { ...data.ways.get(r.outers[0])?.tags, ...r.tags };
-    stitchRings(r.outers, data).forEach((ids, i) => found.push({ id: `rel${r.id}${i ? '.' + i : ''}`, tags, ring: toRing(ids) }));
+    const rings = stitchRings(r.outers, data).map(toRing);
+    const largest = Math.max(1e-6, ...rings.map((ring) => Math.abs(ringArea(ring))));
+    rings.forEach((ring, i) => found.push({ id: `rel${r.id}${i ? '.' + i : ''}`, tags, ring, share: Math.abs(ringArea(ring)) / largest }));
   }
   return found;
 }
@@ -77,6 +81,12 @@ export function interpretBuildings(
     // A bridge mapped as a building is already a road with a bridge level; do not build it twice.
     if (!t.building || t.building === 'no' || t.building === 'bridge' || t.location === 'underground') continue;
     if (o.ring.length < 3 || !inRect(centroid(o.ring), bounds)) continue;
+    const footprint = Math.abs(ringArea(o.ring));
+    // A scrap of a many-part outline is a mapping leftover, not a building of its own.
+    if (o.share < 0.1 && footprint < 25) {
+      bump('buildings.skippedScraps');
+      continue;
+    }
     const m = measure(o.ring);
     const tagged = parseFloat(t.height ?? '');
     const levels = parseFloat(t['building:levels'] ?? '');
@@ -87,6 +97,11 @@ export function interpretBuildings(
     else if (tagged > 0) [h, hSource] = [tagged, 'tag'];
     else if (levels > 0) [h, hSource] = [levels * 3.3, 'levels'];
     else [h, hSource] = [4, 'default'];
+    // A footprint the size of a kiosk cannot be measured from the air: the height found is its neighbour's.
+    if (hSource === 'lidar' && footprint < 12 && h > 6) {
+      h = tagged > 0 ? tagged : 3;
+      bump('buildings.height.kioskCapped');
+    }
     bump(`buildings.height.${hSource}`);
     // A roof with no walls is not a building. One beside a bridge deck stands on the bridge: the
     // height measured for it runs all the way down to whatever the bridge crosses.
@@ -118,6 +133,8 @@ function areaKind(t: Tags): Area['kind'] | undefined {
   if (t.leisure === 'park' || t.leisure === 'garden' || t.landuse === 'grass' || t.landuse === 'village_green' || t.landuse === 'recreation_ground') return 'park';
   if (t.amenity === 'university' || t.amenity === 'college') return 'campus';
   if (t.amenity === 'parking' && t.parking !== 'underground' && t.parking !== 'multi-storey') return 'parking';
+  // A site being built on, or cleared and waiting: a sealed yard, which is what a car park is too.
+  if (t.landuse === 'construction' || t.landuse === 'brownfield') return 'parking';
   if (t.highway === 'pedestrian' && t.area === 'yes') return 'plaza';
   if (t.natural === 'beach' || t.natural === 'sand') return 'beach';
   if (t.natural === 'bare_rock') return 'rock';

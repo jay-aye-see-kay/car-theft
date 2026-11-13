@@ -6,7 +6,7 @@
 // they would call an intersection (one place, however many nodes the map used).
 import { type Rect, inRect, polylineLength, rectCrossing, simplify } from '../geo/poly.ts';
 import type { Junction, Pt, Road, RoadClass, RoadSection } from '../model/types.ts';
-import type { OsmData, Tags } from './osm.ts';
+import type { OsmData, OsmWay, Tags } from './osm.ts';
 
 const CLASS: Record<string, RoadClass> = {
   motorway: 'motorway',
@@ -96,15 +96,34 @@ export function interpretRoads(
   const pos = new Map<number, Pt>();
   let synthetic = -1;
 
+  // A road sometimes carries on as a few metres of mapped footway (past a bollard, across a kerb) before
+  // becoming a road again. Such a link, joining the ends of two roads, is paved like the road it joins.
+  const roadEnds = new Set<number>();
+  for (const way of data.ways.values()) {
+    if (!way.tags.highway || !drivable(way.tags) || way.nodes.length < 2) continue;
+    roadEnds.add(way.nodes[0]);
+    roadEnds.add(way.nodes[way.nodes.length - 1]);
+  }
+  const link = (way: OsmWay): boolean => {
+    const t = way.tags;
+    if (!(t.highway === 'footway' || t.highway === 'path' || t.highway === 'pedestrian' || t.highway === 'cycleway')) return false;
+    if (t.area === 'yes' || t.footway === 'sidewalk' || t.footway === 'crossing' || t.bridge || t.tunnel || way.nodes.length < 2) return false;
+    if (!roadEnds.has(way.nodes[0]) || !roadEnds.has(way.nodes[way.nodes.length - 1])) return false;
+    const pts = way.nodes.map((id) => data.nodes.get(id)).filter((q): q is Pt => !!q);
+    return polylineLength(pts) < 40;
+  };
+
   // 1. Cut each way to the tile, giving pieces that lie wholly inside.
   const pieces: Edge[] = [];
   for (const way of data.ways.values()) {
     if (!way.tags.highway) continue;
-    if (!drivable(way.tags)) {
+    const linking = link(way);
+    if (linking) bump('roads.walkwayLinksPaved');
+    else if (!drivable(way.tags)) {
       if (way.tags.highway in CLASS) bump('roads.skippedDrivewaysAndAisles');
       continue;
     }
-    const { attrs, reversed } = readAttrs(way.tags);
+    const { attrs, reversed } = readAttrs(linking ? { highway: 'service', name: way.tags.name } : way.tags);
     const ids = reversed ? way.nodes.slice().reverse() : way.nodes;
     let cur: Edge | null = null;
     for (let i = 0; i < ids.length; i++) {

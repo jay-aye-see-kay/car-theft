@@ -4,6 +4,7 @@
 // there. Positions are measured from the road's own start so they come out the same every time.
 import type { JunctionShape } from './junctions.ts';
 import { hashOf } from './facade.ts';
+import { outranks } from './roadIndex.ts';
 import { type RoadParams, type Track, sampleAt } from './tracks.ts';
 import type { ProfileContext } from '../profile/context.ts';
 import { pick } from '../profile/context.ts';
@@ -35,8 +36,11 @@ export function furnishStreets(
 ): Prop[] {
   const props: Prop[] = [];
 
-  /** A point `lateral` metres left of the centreline at distance `s`, or nothing if that spot will not do. */
-  const spot = (t: Track, s: number, lateral: number, allowDeck: boolean) => {
+  /**
+   * A point `lateral` metres left of the road's edge at distance `s`, or nothing if that spot will not do:
+   * in a building, in a tunnel, or with less than `needs` metres before the next carriageway.
+   */
+  const spot = (t: Track, s: number, lateral: number, allowDeck: boolean, needs = 1.2) => {
     const c = sampleAt(t, s);
     const level = Math.max(t.level[c.i], t.level[Math.min(t.n - 1, c.i + 1)]);
     const low = Math.min(t.level[c.i], t.level[Math.min(t.n - 1, c.i + 1)]);
@@ -44,6 +48,8 @@ export function furnishStreets(
     const d = Math.hypot(c.tx, c.ty) || 1;
     const half = (c.wF + c.wB) / 2 + t.shoulder;
     const side = Math.sign(lateral);
+    const room = t.room[side > 0 ? 0 : 1];
+    if (Math.min(room[c.i], room[Math.min(t.n - 1, c.i + 1)]) < needs) return undefined;
     const off = side * (half + Math.abs(lateral));
     const x = c.x - (c.ty / d) * off;
     const y = c.y + (c.tx / d) * off;
@@ -52,7 +58,10 @@ export function furnishStreets(
     return { x, y, h: c.h + (t.road.footpath ? p.kerbHeight : 0), yaw: Math.atan2((c.tx / d) * -side, (-c.ty / d) * -side) };
   };
 
-  for (const t of tracks) {
+  const all = [...tracks];
+  const lamps: { t: Track; prop: Prop }[] = [];
+
+  for (const t of all) {
     const from = t.cutA + 5;
     const to = t.length - t.cutB - 5;
     const run = to - from;
@@ -72,13 +81,18 @@ export function furnishStreets(
       const count = Math.max(1, Math.round(run / every));
       for (let k = 0; k < count; k++) {
         const s = from + ((k + 0.5) / count) * run;
-        const sides = sidesRule === 'both' ? [1, -1] : sidesRule === 'alternate' ? [k % 2 ? 1 : -1] : [1];
-        for (const side of sides) {
-          // A one-way road keeps its lamps on the left of travel; the divided road's other half lights the other side.
-          const at = spot(t, s, side * 0.55, true);
-          if (!at) continue;
-          props.push({ kind: lampKind, ...at, size: major ? 1.45 : t.cls === 'lane' ? 0.8 : 1, tint: 0 });
-          lampAt.push(s);
+        // A one-way road keeps its lamps on the left of travel; the divided road's other half lights the other side.
+        // Where the left is hard against another carriageway the lamp crosses to the right, or is left out.
+        const wide = mid.wF + mid.wB > t.laneWidth * 2.5;
+        const sides = sidesRule === 'both' && wide ? [[1], [-1]] : sidesRule !== 'left' ? [[k % 2 ? 1 : -1]] : [[1, -1]];
+        for (const choice of sides) {
+          for (const side of choice) {
+            const at = spot(t, s, side * 0.55, true, major ? p.footpathWidth - 0.05 : 1.2);
+            if (!at) continue;
+            lamps.push({ t, prop: { kind: lampKind, ...at, size: major ? 1.45 : t.cls === 'lane' ? 0.8 : 1, tint: 0 } });
+            lampAt.push(s);
+            break;
+          }
         }
       }
     }
@@ -128,9 +142,16 @@ export function furnishStreets(
     }
   }
 
-  // Signals: where three or more arms meet and at least two of them are main roads.
+  // Roads that run together would each bring their own row of lamps. Where two rows crowd each other
+  // the lesser road's lamp goes; the other row lights both.
+  for (const l of lamps) {
+    const crowd = l.prop.kind === 'mast' ? 16 : 9;
+    if (!lamps.some((o) => o.t !== l.t && outranks(o.t, l.t) && Math.hypot(o.prop.x - l.prop.x, o.prop.y - l.prop.y) < crowd)) props.push(l.prop);
+  }
+
+  // Signals: where traffic can leave three or more ways and at least two of the arms are main roads.
   for (const j of junctions) {
-    if (j.status === 'merge' || j.mouths.length < 3) continue;
+    if (j.status === 'merge' || j.groups < 3) continue;
     const classes = j.mouths.map((m) => m.track.cls);
     if (classes.includes('motorway') || classes.filter((c) => c === 'arterial' || c === 'collector').length < 2) continue;
     for (const { track: t, end } of j.mouths) {

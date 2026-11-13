@@ -3,6 +3,7 @@
 import { dist } from '../geo/poly.ts';
 import type { Heightfield } from '../model/load.ts';
 import type { Pt, Road, RoadClass, TileModel } from '../model/types.ts';
+import { RoadIndex, outranks } from './roadIndex.ts';
 
 export interface RoadParams {
   /** Metres between samples along a road. */
@@ -64,9 +65,45 @@ export interface Track {
   /** Set by the junction solver: the track is only built between these distances. */
   cutA: number;
   cutB: number;
+  /** Set by the junction solver where an end is a seam: the road and its lines carry straight on. */
+  thruA: boolean;
+  thruB: boolean;
+  /**
+   * Room on the left and right of each sample before the next carriageway, capped at a footpath's
+   * width. See `measureSides`.
+   */
+  room: [Float32Array, Float32Array];
 }
 
 export const halfWidth = (t: Track, i: number): number => (t.wF[i] + t.wB[i]) / 2 + t.shoulder;
+
+/** The deepest a bridge deck gets, and the depth of any structure that runs on through a junction. */
+export const DECK_DEPTH = 1.5;
+const DECK_MIN = 0.5;
+/** Metres of span carried per metre of depth. */
+const DECK_SLENDERNESS = 30;
+
+const deckDepths = new WeakMap<Track, Float32Array>();
+/**
+ * How deep the deck is under sample `i`: a short span is a thin slab, a long one a deep girder.
+ * A structure that reaches the end of its road carries on past it, so its length is unknown and
+ * it gets the full depth.
+ */
+export function deckDepth(t: Track, i: number): number {
+  let depth = deckDepths.get(t);
+  if (!depth) {
+    depth = new Float32Array(t.n).fill(DECK_DEPTH);
+    for (let a = 0; a < t.n; a++) {
+      if (t.level[a] <= 0) continue;
+      let b = a;
+      while (b + 1 < t.n && t.level[b + 1] > 0) b++;
+      if (a > 0 && b < t.n - 1) depth.fill(Math.min(DECK_DEPTH, Math.max(DECK_MIN, (t.s[b] - t.s[a]) / DECK_SLENDERNESS)), a, b + 1);
+      a = b;
+    }
+    deckDepths.set(t, depth);
+  }
+  return depth[i];
+}
 
 /** Rounds corners by cutting each one back up to `cap` metres, twice. Straight runs are untouched. */
 function roundCorners(pts: Pt[], cap: number): Pt[] {
@@ -127,6 +164,9 @@ export function buildTrack(road: Road, p: RoadParams): Track {
     h: new Float32Array(n),
     cutA: 0,
     cutB: 0,
+    thruA: false,
+    thruB: false,
+    room: [new Float32Array(n).fill(p.footpathWidth), new Float32Array(n).fill(p.footpathWidth)],
   };
 
   let seg = 0;
@@ -268,10 +308,50 @@ export function solveElevations(model: TileModel, tracks: Map<string, Track>, gr
       for (let i = 1; i < t.n - 1; i++) t.h[i] = 0.25 * tmp[i - 1] + 0.5 * tmp[i] + 0.25 * tmp[i + 1];
     }
   }
+  settleOverlaps(all, p);
   markSpans(all);
   liftForHeadroom(model, tracks, all);
   markSpans(all);
   return jh;
+}
+
+/**
+ * Two roads that overlap or run edge to edge are one piece of asphalt, but each took its heights from
+ * the ground under its own centreline. The lesser road takes the greater one's surface where they
+ * touch, and is smoothed again from there.
+ */
+function settleOverlaps(all: Track[], p: RoadParams): void {
+  const index = new RoadIndex(all);
+  const order = all.slice().sort((a, b) => (outranks(a, b) ? -1 : 1));
+  for (const t of order) {
+    const pinned = new Uint8Array(t.n);
+    let any = false;
+    for (let i = 0; i < t.n; i++) {
+      let best = Infinity;
+      for (const o of index.near(t.x[i], t.y[i])) {
+        if (o.t === t || !outranks(o.t, t) || (o.t.level[o.i] !== 0) !== (t.level[i] !== 0)) continue;
+        if (Math.abs(o.t.h[o.i] - t.h[i]) > 2.5) continue;
+        if (Math.abs(t.tx[i] * o.t.tx[o.i] + t.ty[i] * o.t.ty[o.i]) < 0.7) continue;
+        const d = Math.hypot(o.t.x[o.i] - t.x[i], o.t.y[o.i] - t.y[i]);
+        if (d >= best || d > (t.wF[i] + t.wB[i] + o.t.wF[o.i] + o.t.wB[o.i]) / 2 + 0.5) continue;
+        best = d;
+        // Height along the other road at the point beside this sample.
+        const [dx, dy] = [t.x[i] - o.t.x[o.i], t.y[i] - o.t.y[o.i]];
+        const along = dx * o.t.tx[o.i] + dy * o.t.ty[o.i];
+        const k = Math.min(o.t.n - 1, Math.max(0, o.i + Math.sign(along)));
+        const span = Math.abs(o.t.s[k] - o.t.s[o.i]) || 1;
+        t.h[i] = o.t.h[o.i] + (o.t.h[k] - o.t.h[o.i]) * Math.min(1, Math.abs(along) / span);
+        pinned[i] = 1;
+        any = true;
+      }
+    }
+    if (!any) continue;
+    const tmp = new Float32Array(t.n);
+    for (let pass = 0; pass < p.profileSmoothing; pass++) {
+      tmp.set(t.h);
+      for (let i = 1; i < t.n - 1; i++) if (!pinned[i]) t.h[i] = 0.25 * tmp[i - 1] + 0.5 * tmp[i] + 0.25 * tmp[i + 1];
+    }
+  }
 }
 
 type Sample = { t: Track; i: number };

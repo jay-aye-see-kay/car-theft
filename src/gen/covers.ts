@@ -1,7 +1,7 @@
 // Open-sided covers: canopies and shelters on posts, and the glazed screens that line some bridges.
 // The model says only "a cover stands here"; everything else is generated.
 import * as THREE from 'three';
-import { centroid, dist } from '../geo/poly.ts';
+import { centroid, dist, pointInRing, ringArea } from '../geo/poly.ts';
 import type { Heightfield } from '../model/load.ts';
 import type { Building, Pt } from '../model/types.ts';
 import type { Track } from './tracks.ts';
@@ -55,7 +55,75 @@ export interface CoverMeshes {
   glass: THREE.BufferGeometry;
 }
 
+/** Top of a shop verandah above the footpath, and of a bus or park shelter. */
+const VERANDAH = 3.6;
+const SHELTER = 2.7;
+/** A cover at least this deep, front to back, is more than a verandah. */
+const PORTICO_DEPTH = 8;
+const PORTICO_MAX = 12;
+
+/** The ring's extent across its longest edge. */
+function depthOf(ring: Pt[]): number {
+  let [len, ux, uy] = [0, 1, 0];
+  ring.forEach((p, i) => {
+    const q = ring[(i + 1) % ring.length];
+    const l = dist(p, q);
+    if (l > len) [len, ux, uy] = [l, (q[0] - p[0]) / l, (q[1] - p[1]) / l];
+  });
+  const across = ring.map(([x, y]) => -x * uy + y * ux);
+  return Math.max(...across) - Math.min(...across);
+}
+
+const boxes = new WeakMap<Building, [number, number, number, number]>();
+function boxOf(b: Building): [number, number, number, number] {
+  let box = boxes.get(b);
+  if (!box) {
+    box = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of b.ring) box = [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)];
+    boxes.set(b, box);
+  }
+  return box;
+}
+
+/** True if any corner or edge midpoint of the cover is in or hard against a walled building. */
+function attached(cover: Building, walled: Building[]): boolean {
+  const probes: Pt[] = [];
+  cover.ring.forEach((p, i) => {
+    const q = cover.ring[(i + 1) % cover.ring.length];
+    probes.push(p, [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]);
+  });
+  const [x0, y0, x1, y1] = boxOf(cover);
+  return walled.some((b) => {
+    const box = boxOf(b);
+    if (box[0] > x1 + 2 || box[2] < x0 - 2 || box[1] > y1 + 2 || box[3] < y0 - 2) return false;
+    return probes.some(([x, y]) => {
+      if (pointInRing(x, y, b.ring)) return true;
+      return b.ring.some((a, i) => {
+        const c = b.ring[(i + 1) % b.ring.length];
+        const len2 = (c[0] - a[0]) ** 2 + (c[1] - a[1]) ** 2 || 1;
+        const u = Math.min(1, Math.max(0, ((x - a[0]) * (c[0] - a[0]) + (y - a[1]) * (c[1] - a[1])) / len2));
+        return Math.hypot(x - a[0] - (c[0] - a[0]) * u, y - a[1] - (c[1] - a[1]) * u) < 1.5;
+      });
+    });
+  });
+}
+
+/**
+ * How tall a ground-level cover stands. Its measured height is only trusted where a profile says so:
+ * from the air, a verandah reads as the building behind it and a bus shelter as the tree over it.
+ */
+export function coverHeight(b: Building, walled: Building[]): number {
+  if (b.kind === 'shelter') return SHELTER;
+  // A deep roof is a portico or a forecourt canopy, and big enough for its own height to have been
+  // measured. A shallow one hard against a building is a verandah over the footpath.
+  if (depthOf(b.ring) >= PORTICO_DEPTH) return Math.min(Math.max(VERANDAH, b.h), PORTICO_MAX);
+  if (attached(b, walled)) return VERANDAH;
+  // Free-standing: a small one is a shelter or carport, a big one a forecourt canopy.
+  return Math.abs(ringArea(b.ring)) < 40 ? Math.min(b.h, 3.2) : Math.min(b.h, 6.5);
+}
+
 export function buildCovers(buildings: Building[], ground: Heightfield, tracks: Iterable<Track>): CoverMeshes {
+  const walled = buildings.filter((b) => !b.cover);
   const frame = new Soup();
   const glass = new Soup();
 
@@ -82,7 +150,7 @@ export function buildCovers(buildings: Building[], ground: Heightfield, tracks: 
     const ring = b.ring;
     const c = centroid(ring);
     const base = Math.max(...ring.map((p) => ground.at(p[0], p[1])));
-    const top = base + Math.max(2.8, b.h);
+    const top = base + Math.max(2.6, coverHeight(b, walled));
     const under = top - 0.3;
     const faces = THREE.ShapeUtils.triangulateShape(ring.map((p) => new THREE.Vector2(p[0], p[1])), []);
     for (const [i, j, k] of faces) {

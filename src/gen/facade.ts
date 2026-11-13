@@ -38,6 +38,8 @@ export interface FacadeOptions {
   styleOf: (b: Building) => Style;
   /** True where a point is on or beside a road; walls facing one get shopfronts and awnings. */
   nearRoad: (x: number, y: number) => boolean;
+  /** True under a mapped canopy or verandah: a wall there already has its awning. */
+  covered?: (x: number, y: number) => boolean;
 }
 
 export function buildFacades(buildings: Building[], ground: Heightfield, opts: FacadeOptions): THREE.BufferGeometry {
@@ -111,6 +113,11 @@ export function buildFacades(buildings: Building[], ground: Heightfield, opts: F
       const mid = run[run.length >> 1];
       const [mx, my] = [mid.ax + (mid.dx * mid.len) / 2, mid.ay + (mid.dy * mid.len) / 2];
       return lengthOf(run) > BAY && opts.nearRoad(mx + mid.dy * 5, my - mid.dx * 5);
+    });
+    const underCover = facades.map((run) => {
+      const mid = run[run.length >> 1];
+      const [mx, my] = [mid.ax + (mid.dx * mid.len) / 2, mid.ay + (mid.dy * mid.len) / 2];
+      return !!opts.covered?.(mx + mid.dy * 1.2, my - mid.dx * 1.2);
     });
     // The door goes on the longest facade that faces a road.
     let doorFacade = -1;
@@ -213,7 +220,7 @@ export function buildFacades(buildings: Building[], ground: Heightfield, opts: F
       }
 
       // Things that run the length of the facade.
-      if (style.awning && facesRoad[fi]) box(0.2, len - 0.2, floor0 + fh * 0.84, floor0 + fh * 0.84 + 0.22, 2.3, shade(rgb(style.walls[(seed >>> 8) % style.walls.length]), 0.8));
+      if (style.awning && facesRoad[fi] && !underCover[fi]) box(0.2, len - 0.2, floor0 + fh * 0.84, floor0 + fh * 0.84 + 0.22, 2.3, shade(rgb(style.walls[(seed >>> 8) % style.walls.length]), 0.8));
       if (style.cornice) box(0, len, top - 0.15, top + 0.3, 0.3, trimC);
       if (style.parapet) panel(0, len, top, top + style.parapet, wallC);
     });

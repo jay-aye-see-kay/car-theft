@@ -6,10 +6,11 @@ import '../ui/lab.css';
 import { toNztm } from '../geo/nztm.ts';
 import { buildMassing } from '../gen/buildings.ts';
 import { buildCovers } from '../gen/covers.ts';
-import { type JunctionShape, solveJunctions } from '../gen/junctions.ts';
+import type { JunctionShape } from '../gen/junctions.ts';
+import { buildNetwork } from '../gen/network.ts';
 import { buildRoadMeshes } from '../gen/roadMesh.ts';
 import { buildTerrainGeometry, gradeTerrain, paintGround } from '../gen/terrain.ts';
-import { DEFAULT_PARAMS, type RoadParams, type Track, buildTrack, solveElevations } from '../gen/tracks.ts';
+import { DEFAULT_PARAMS, type RoadParams, type Track } from '../gen/tracks.ts';
 import { loadTile } from '../model/load.ts';
 
 const canvas = document.getElementById('stage') as HTMLCanvasElement;
@@ -65,10 +66,8 @@ function generate(): void {
   for (const child of world.children) (child as THREE.Mesh).geometry.dispose();
   world.clear();
 
-  tracks = new Map(model.roads.map((r) => [r.id, buildTrack(r, params)]));
-  solveElevations(model, tracks, ground, params);
-  shapes = solveJunctions(model, tracks, params);
-  const graded = gradeTerrain(ground, tracks.values(), shapes, params);
+  ({ tracks, junctions: shapes } = buildNetwork(model, ground, params));
+  const graded = gradeTerrain(ground, tracks.values(), shapes, params, model.paths);
   const roads = buildRoadMeshes(tracks.values(), shapes, params, { tintJunctions: view.tintJunctions });
 
   world.add(new THREE.Mesh(buildTerrainGeometry(graded), mats.terrain));

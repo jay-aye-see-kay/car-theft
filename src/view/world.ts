@@ -6,13 +6,13 @@ import * as THREE from 'three';
 import { buildMassing } from '../gen/buildings.ts';
 import { buildCovers } from '../gen/covers.ts';
 import { buildFacades } from '../gen/facade.ts';
-import { solveJunctions } from '../gen/junctions.ts';
+import { buildNetwork } from '../gen/network.ts';
 import { buildRoadMeshes } from '../gen/roadMesh.ts';
 import { type Instance, occupancy } from '../gen/scatter.ts';
 import type { Site } from '../gen/site.ts';
 import { type MapMode, buildTerrainGeometry, buildTerrainSkirt, gradeTerrain, paintGround } from '../gen/terrain.ts';
-import { DEFAULT_PARAMS, type Track, buildTrack, solveElevations } from '../gen/tracks.ts';
-import { centroid } from '../geo/poly.ts';
+import { DEFAULT_PARAMS, type Track, buildTrack } from '../gen/tracks.ts';
+import { centroid, pointInRing } from '../geo/poly.ts';
 import { kits } from '../kit/kits.ts';
 import type { Heightfield } from '../model/load.ts';
 import type { Building, TileModel } from '../model/types.ts';
@@ -63,6 +63,7 @@ export class World {
   buildingMeshes: { mesh: THREE.Mesh; buildings: Building[]; facades: boolean }[] = [];
   private land: Heightfield;
   private nearRoad: (x: number, y: number) => boolean = () => false;
+  private covered: (x: number, y: number) => boolean;
   private solid: Building[];
   private centres: [number, number][];
   private disposable: { dispose(): void }[] = [];
@@ -77,6 +78,8 @@ export class World {
     // Canopies and screens are not buildings; they have their own generator.
     this.solid = model.buildings.filter((b) => !b.cover);
     this.centres = this.solid.map((b) => centroid(b.ring));
+    const covers = model.buildings.filter((b) => b.cover === 'ground');
+    this.covered = (x, y) => covers.some((b) => pointInRing(x, y, b.ring));
     stage.scene.add(this.group, this.built);
     this.cells = new CellView(stage);
   }
@@ -116,7 +119,7 @@ export class World {
     const styleOf = this.ctx.styleOf;
     for (const [geometry, material, list, facades] of [
       [buildMassing(far, this.land, { palette: o.palette, hillScale: o.hillScale, styleOf, tint }), this.stage.mats.buildings, far, false],
-      [buildFacades(close, this.land, { hillScale: o.hillScale, nearRoad: this.nearRoad, styleOf }), this.stage.mats.facades, close, true],
+      [buildFacades(close, this.land, { hillScale: o.hillScale, nearRoad: this.nearRoad, styleOf, covered: this.covered }), this.stage.mats.facades, close, true],
     ] as const) {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = mesh.receiveShadow = true;
@@ -158,10 +161,8 @@ export class World {
     for (let i = 0; i < land.data.length; i++) land.data[i] *= opts.hillScale;
     this.land = land;
 
-    const tracks = new Map(model.roads.map((r) => [r.id, buildTrack(r, DEFAULT_PARAMS)]));
-    solveElevations(model, tracks, land, DEFAULT_PARAMS);
-    const junctions = solveJunctions(model, tracks, DEFAULT_PARAMS);
-    const graded = gradeTerrain(land, tracks.values(), junctions, DEFAULT_PARAMS);
+    const { tracks, junctions } = buildNetwork(model, land, DEFAULT_PARAMS);
+    const graded = gradeTerrain(land, tracks.values(), junctions, DEFAULT_PARAMS, model.paths);
     const roads = buildRoadMeshes(tracks.values(), junctions, DEFAULT_PARAMS, { tintJunctions: false });
     this.stamps = placeStamps(model, land);
     carveStamps(this.stamps, graded);

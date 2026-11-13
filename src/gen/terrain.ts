@@ -5,10 +5,93 @@ import type { Heightfield } from '../model/load.ts';
 import type { Area, Path, Pt, TileModel } from '../model/types.ts';
 import type { JunctionShape } from './junctions.ts';
 import type { ProfileContext } from '../profile/context.ts';
-import { type RoadParams, type Track, halfWidth } from './tracks.ts';
+import { type RoadParams, type Track, deckDepth, halfWidth } from './tracks.ts';
 
 /** How far the ground sits below a road surface, so it can never show through. */
 const SINK = 0.15;
+
+/** Standing room under a deck. */
+const UNDER_DECK = 2.6;
+/** Rise per metre of the ramps a cut-through makes down to its floor. */
+const UNDER_RAMP = 0.2;
+
+/**
+ * Under a bridge. A survey from the air cannot see beneath a deck, so where a road was built across a
+ * gap and bridged, the ground often reads as solid fill up to the road. Where the map has a footpath
+ * crossing under a bridge there is a way through: the path is cut down to pass beneath the deck, and
+ * ramps back up to the ground on either side.
+ */
+function cutUnderpasses(out: Heightfield, bed: Float32Array, ceiling: Float32Array, tracks: Track[], paths: Path[]): void {
+  const decks: { x: number; y: number; h: number; half: number; tx: number; ty: number }[] = [];
+  for (const t of tracks) for (let i = 0; i < t.n; i++) if (t.level[i] > 0) decks.push({ x: t.x[i], y: t.y[i], h: t.h[i] - deckDepth(t, i), half: halfWidth(t, i), tx: t.tx[i], ty: t.ty[i] });
+  if (!decks.length) return;
+  const { cols, rows, cell, x0, y0 } = out;
+  // Every path at one-metre steps, with the floor height each step needs: under a deck, low enough
+  // to pass beneath it.
+  type Step = { x: number; y: number; floor: number };
+  const walks: Step[][] = [];
+  for (const path of paths) {
+    if (path.level !== 0 || path.pts.length < 2) continue;
+    let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of path.pts) [minX, minY, maxX, maxY] = [Math.min(minX, x), Math.min(minY, y), Math.max(maxX, x), Math.max(maxY, y)];
+    const near = decks.filter((d) => d.x > minX - 20 && d.x < maxX + 20 && d.y > minY - 20 && d.y < maxY + 20);
+    const steps: Step[] = [];
+    for (let i = 1; i < path.pts.length; i++) {
+      const [a, b] = [path.pts[i - 1], path.pts[i]];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const [ux, uy] = [(b[0] - a[0]) / (len || 1), (b[1] - a[1]) / (len || 1)];
+      for (let s = 0; s < len; s++) {
+        const [x, y] = [a[0] + ux * s, a[1] + uy * s];
+        let floor = Infinity;
+        for (const d of near) {
+          // Only where the path goes across the deck: one running along a bridge is on it, not under it.
+          if (Math.hypot(d.x - x, d.y - y) < d.half + 0.5 && Math.abs(ux * d.tx + uy * d.ty) < 0.7) floor = Math.min(floor, d.h - UNDER_DECK);
+        }
+        steps.push({ x, y, floor });
+      }
+    }
+    const last = path.pts[path.pts.length - 1];
+    steps.push({ x: last[0], y: last[1], floor: Infinity });
+    walks.push(steps);
+  }
+  // Ramps climb away from each low stretch, and carry on along whichever paths join at its ends.
+  const ends = new Map<string, number>();
+  const key = (s: Step) => `${Math.round(s.x * 2)},${Math.round(s.y * 2)}`;
+  for (let round = 0, changed = true; changed && round < 8; round++) {
+    changed = false;
+    for (const steps of walks) {
+      const [first, last] = [steps[0], steps[steps.length - 1]];
+      for (const e of [first, last]) e.floor = Math.min(e.floor, ends.get(key(e)) ?? Infinity);
+      if (!steps.some((s) => s.floor < Infinity)) continue;
+      for (let i = 1; i < steps.length; i++) steps[i].floor = Math.min(steps[i].floor, steps[i - 1].floor + UNDER_RAMP);
+      for (let i = steps.length - 2; i >= 0; i--) steps[i].floor = Math.min(steps[i].floor, steps[i + 1].floor + UNDER_RAMP);
+      for (const e of [first, last]) {
+        // No need to pass a ramp on once it has climbed back out of the ground.
+        if (e.floor < out.at(e.x, e.y) - 0.1 && e.floor < (ends.get(key(e)) ?? Infinity) - 0.01) {
+          ends.set(key(e), e.floor);
+          changed = true;
+        }
+      }
+    }
+  }
+  for (const steps of walks) {
+    for (const s of steps) {
+      if (s.floor > out.at(s.x, s.y) - 0.1) continue;
+      const R = 6;
+      for (let r = Math.max(0, Math.floor((s.y - R - y0) / cell)); r <= Math.min(rows - 1, Math.ceil((s.y + R - y0) / cell)); r++) {
+        for (let c = Math.max(0, Math.floor((s.x - R - x0) / cell)); c <= Math.min(cols - 1, Math.ceil((s.x + R - x0) / cell)); c++) {
+          const k = r * cols + c;
+          // The cut has a flat floor and steep sides, and never bites into a road's own bed: only into
+          // open ground, or fill that was pressed up against the underside of a deck.
+          if (bed[k] >= 1 && out.data[k] < ceiling[k] - 0.05) continue;
+          const d = Math.hypot(x0 + c * cell - s.x, y0 + r * cell - s.y);
+          const h = s.floor + Math.max(0, d - 2.5) * 1.5;
+          if (h < out.data[k]) out.data[k] = h;
+        }
+      }
+    }
+  }
+}
 
 const smoothstep = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
@@ -16,14 +99,15 @@ const smoothstep = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 
  * Returns a copy of the ground where every road on the ground has a flat bed under it and
  * the surrounding terrain is blended up or down to meet it. Bridges and tunnels leave the ground alone.
  */
-export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junctions: JunctionShape[], p: RoadParams): Heightfield {
+export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junctions: JunctionShape[], p: RoadParams, paths: Path[] = []): Heightfield {
   const out = ground.clone();
   const { cols, rows, cell, x0, y0 } = out;
   const weight = new Float32Array(cols * rows);
   const target = new Float32Array(cols * rows);
   const ceiling = new Float32Array(cols * rows).fill(Infinity);
+  const all = [...tracks];
 
-  for (const t of tracks) {
+  for (const t of all) {
     const extra = (t.road.footpath ? p.footpathWidth : 0) + 1.2;
     for (let i = 0; i < t.n - 1; i++) {
       if (t.level[i] < 0 || t.level[i + 1] < 0) continue;
@@ -103,6 +187,7 @@ export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junct
     if (weight[k] > 0) out.data[k] += (target[k] - out.data[k]) * weight[k];
     if (out.data[k] > ceiling[k]) out.data[k] = ceiling[k];
   }
+  cutUnderpasses(out, weight, ceiling, all, paths);
   return out;
 }
 
