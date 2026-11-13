@@ -42,6 +42,11 @@ export interface Junction {
   y: number;
   /** Roads meeting here, and which end of each ('a' is the start of its points). */
   arms: { road: string; end: 'a' | 'b' }[];
+  /**
+   * Short stretches of road that lay wholly inside the intersection when its nodes were merged.
+   * They are no longer roads, but they say where the intersection's surface is.
+   */
+  links?: { pts: Pt[]; cls: RoadClass; lanes: number }[];
 }
 
 export interface Building {

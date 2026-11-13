@@ -268,6 +268,7 @@ export function interpretRoads(
   for (const c of chains) for (const id of [c.a, c.b]) armCount.set(id, (armCount.get(id) ?? 0) + 1);
   const length = new Map(chains.map((c) => [c, polylineLength(c.pts)]));
   const kept: Chain[] = [];
+  const collapsed: Chain[] = [];
   for (const c of chains) {
     const len = length.get(c)!;
     const real = (id: number) => (armCount.get(id) ?? 0) >= 3;
@@ -277,13 +278,17 @@ export function interpretRoads(
     if (c.a !== c.b && (len < 1 || (len < opts.clusterDist && real(c.a) && real(c.b) && sameLevel))) {
       const [ra, rb] = [find(c.a), find(c.b)];
       if (ra !== rb) parent.set(ra, rb);
+      if (len >= 1) collapsed.push(c);
       bump('junctions.shortLinksCollapsed');
     } else kept.push(c);
   }
   // Slivers left wholly inside a merged intersection.
   const roadsOut = kept.filter((c) => {
     const inside = find(c.a) === find(c.b) && c.a !== c.b && length.get(c)! < opts.clusterDist * 2.5;
-    if (inside) bump('junctions.shortLinksCollapsed');
+    if (inside) {
+      collapsed.push(c);
+      bump('junctions.shortLinksCollapsed');
+    }
     return !inside;
   });
 
@@ -305,6 +310,13 @@ export function interpretRoads(
     const y = ids.reduce((sum, i) => sum + pos.get(i)![1], 0) / ids.length;
     junctions.set(id, { id, x: round(x), y: round(y), arms: [] });
     if (ids.length > 1) bump('junctions.merged');
+  }
+
+  for (const c of collapsed) {
+    const j = junctions.get(jid.get(find(c.a))!);
+    if (!j) continue;
+    const widest = c.sections.reduce((m, s) => (s.lanesF + s.lanesB > m.lanesF + m.lanesB ? s : m));
+    (j.links ??= []).push({ pts: c.pts.map((p): Pt => [round(p[0]), round(p[1])]), cls: widest.cls, lanes: widest.lanesF + widest.lanesB });
   }
 
   const seen = new Map<string, number>();

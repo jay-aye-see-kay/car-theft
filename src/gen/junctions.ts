@@ -5,6 +5,7 @@
 // The same rule covers a T, a crossroads, a five-way and a merged dual-carriageway crossing.
 import { Region, type XY } from '../geo/clip.ts';
 import { distanceToTrack } from './roadIndex.ts';
+import type { Junction } from '../model/types.ts';
 import type { JunctionPlan } from './seams.ts';
 import { type RoadParams, type Track, halfWidth, sampleAt } from './tracks.ts';
 
@@ -146,6 +147,33 @@ function strip(a: Arm, s0: number, s1: number, widen = 0): XY[] {
   return [...right, ...left.reverse()];
 }
 
+/** The surface of the short roads that were folded into a junction when its nodes were merged. */
+function linkRegion(j: Junction, p: RoadParams): Region {
+  const rings: XY[][] = [];
+  for (const l of j.links ?? []) {
+    const hw = (Math.max(1, l.lanes) * p.laneWidth[l.cls]) / 2 + p.shoulder[l.cls];
+    l.pts.forEach(([x, y], i) => {
+      if (i > 0 && i < l.pts.length - 1) {
+        // A disc at each bend, so the outside of the corner is covered.
+        const disc: XY[] = [];
+        for (let k = 0; k < 12; k++) disc.push({ x: x + Math.cos((k * Math.PI) / 6) * hw, y: y + Math.sin((k * Math.PI) / 6) * hw });
+        rings.push(disc);
+      }
+      if (i === 0) return;
+      const [px, py] = l.pts[i - 1];
+      const d = Math.hypot(x - px, y - py) || 1;
+      const [nx, ny] = [(-(y - py) / d) * hw, ((x - px) / d) * hw];
+      rings.push([
+        { x: px + nx, y: py + ny },
+        { x: px - nx, y: py - ny },
+        { x: x - nx, y: y - ny },
+        { x: x + nx, y: y + ny },
+      ]);
+    });
+  }
+  return Region.of(rings).union();
+}
+
 const alongside = (a: Arm, b: Arm): boolean => {
   const cross = Math.abs(a.dx * b.dy - a.dy * b.dx);
   return cross < PARALLEL || (a.dx * b.dx + a.dy * b.dy > 0 && cross < ALONGSIDE);
@@ -171,17 +199,21 @@ const NOTCH = 3.5;
  * The junction as stubs of every arm, the area between their ends, and a kerb fillet in every corner
  * between neighbours that go different ways. Each arm is then cut where it clears all of that.
  */
-function solveCuts(arms: Arm[], node: { x: number; y: number }, p: RoadParams): Body {
+function solveCuts(arms: Arm[], node: Junction, p: RoadParams): Body {
   const reach = arms.map((a) => a.maxCut + 2);
   // Arms do not always end at one point: where the map's node sits off a road's line, an arm is carried
   // straight back until it runs into another arm, going no further than the node or the furthest arm end behind it.
+  const links = linkRegion(node, p);
   const own = arms.map((a, i) => Region.of([strip(a, -0.5, reach[i])]));
   const starts = arms.map((a) => frame(a, 0));
   const back = arms.map((_, i) => {
     const f = starts[i];
     const behind = (q: { x: number; y: number }): number => -((q.x - f.x) * f.dx + (q.y - f.y) * f.dy);
     const limit = Math.min(15, Math.max(0.5, behind(node), ...starts.map(behind)));
-    const into = (e: number): boolean => own.some((o, k) => k !== i && o.contains(f.x - f.dx * e, f.y - f.dy * e));
+    const into = (e: number): boolean => {
+      const [x, y] = [f.x - f.dx * e, f.y - f.dy * e];
+      return links.contains(x, y) || own.some((o, k) => k !== i && o.contains(x, y));
+    };
     for (let e = 0.5; e < limit; e += 0.5) if (into(e)) return e;
     return limit;
   });
@@ -206,13 +238,13 @@ function solveCuts(arms: Arm[], node: { x: number; y: number }, p: RoadParams): 
     // A sharp corner takes a tight kerb, or the fillet would fill the whole wedge between the arms.
     const base = a.t.cls === 'lane' || b.t.cls === 'lane' ? p.kerbRadius * 0.5 : p.kerbRadius;
     const r = between < Math.PI / 2 ? base * Math.max(0.3, Math.sin(between)) : base;
-    fill = fill.union(stubs[i].union(stubs[k]).close(r));
+    fill = fill.union(stubs[i].union(stubs[k]).union(links).close(r));
   }
-  let whole = fill.union(Region.of(arms.map((a, i) => strip(a, -back[i], reach[i]))));
+  let whole = fill.union(Region.of(arms.map((a, i) => strip(a, -back[i], reach[i])))).union(links);
 
   let squeezed = false;
   arms.forEach((a, i) => {
-    let others = fill;
+    let others = fill.union(links);
     arms.forEach((b, k) => {
       if (k !== i && !alongside(a, b)) others = others.union(stubs[k]);
     });
