@@ -12,6 +12,7 @@ import { type Level, clearResolved, leaves } from '../profile/resolve.ts';
 import { cellsOf } from '../gen/cells.ts';
 import { checkCells } from '../gen/site.ts';
 import { fromNztm } from '../geo/nztm.ts';
+import { createReports, restoreView } from '../view/report.ts';
 import { createDrive, createStage, lookAtLatLon } from '../view/stage.ts';
 import { World } from '../view/world.ts';
 
@@ -38,6 +39,25 @@ const world = new World(stage, model, ground, makeCtx(), {
   map: map === 'profiles' || map === 'zoning' ? map : 'generated',
 });
 const drive = createDrive(stage, model, () => world.surface, () => renderHud());
+const reports = createReports(stage, {
+  lab: 'profiles',
+  model,
+  describe: (x, y) => {
+    const info = world.ctx.describe(x, y);
+    return {
+      profile: info.profile.top.id,
+      zone: info.zone?.zone,
+      place: info.place?.name,
+      cover: info.cover,
+      // Nearest first: the first one is most likely the thing that was clicked.
+      placed: world.placed
+        .map((p) => ({ kit: p.kit, x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, d: Math.round(Math.hypot(p.x - x, p.y - y) * 10) / 10 }))
+        .filter((p) => p.d < 6)
+        .sort((p, q) => p.d - q.d)
+        .slice(0, 6),
+    };
+  },
+});
 
 function renderHud(): void {
   const ctx = world.ctx;
@@ -73,7 +93,7 @@ const ray = new THREE.Raycaster();
 let down: [number, number] | undefined;
 canvas.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY]));
 canvas.addEventListener('pointerup', (e) => {
-  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || drive.on) return;
+  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || drive.on || reports.picking) return;
   ray.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), stage.camera);
   const targets = [world.terrainMesh!, ...world.buildingMeshes.map((m) => m.mesh)];
   const hit = ray.intersectObjects(targets, false)[0];
@@ -134,11 +154,14 @@ for (const { spec, run } of world.stamps) {
   [entry[3], entry[4]] = [80, (Math.atan2(tx - bx, ty - by) * 180) / Math.PI];
 }
 const at = query.get('at')?.split(',').map(Number);
-if (at && at.length >= 4 && at.every(Number.isFinite)) go(at[0], at[1], at[2], at[3], at[4]);
-else {
-  const want = query.get('jump')?.toLowerCase();
-  const place = PLACES[tile].find((p) => want && p[0].toLowerCase().startsWith(want)) ?? PLACES[tile][0];
-  go(...(place.slice(1) as [number, number, number, number]));
+// A #view in the URL (kept up to date as the camera moves) wins over ?at and ?jump.
+if (!restoreView(stage)) {
+  if (at && at.length >= 4 && at.every(Number.isFinite)) go(at[0], at[1], at[2], at[3], at[4]);
+  else {
+    const want = query.get('jump')?.toLowerCase();
+    const place = PLACES[tile].find((p) => want && p[0].toLowerCase().startsWith(want)) ?? PLACES[tile][0];
+    go(...(place.slice(1) as [number, number, number, number]));
+  }
 }
 world.rebuildBuildings();
 renderHud();

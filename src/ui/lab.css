@@ -43,3 +43,13 @@ canvas.stage { position: fixed; inset: 0; width: 100%; height: 100%; display: bl
 .hud .legend div { break-inside: avoid; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .marker { position: fixed; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid var(--accent); border-radius: 50%; pointer-events: none; }
 @media (max-width: 600px) { .inspector { max-height: 38vh; } .hud .legend { display: none; } }
+.reports { left: auto; top: auto; right: 12px; bottom: 12px; max-width: min(300px, calc(100vw - 24px)); max-height: 60vh; overflow: auto; }
+.reports button { background: #22262d; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; font: inherit; cursor: pointer; }
+.reports button:hover, .reports button.on { border-color: var(--accent); color: var(--accent); }
+.reports #rp-toggle { width: 100%; }
+.reports textarea { width: 100%; margin-top: 6px; background: #22262d; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px; font: inherit; resize: vertical; }
+.reports .row { display: flex; gap: 6px; margin-top: 6px; }
+.reports .row button { flex: 1; }
+.reports ol { margin: 8px 0 0; padding-left: 22px; font-size: 12.5px; }
+.reports li { margin: 2px 0; }
+.reports li button { padding: 0 5px; border: 0; background: none; color: var(--muted); }
