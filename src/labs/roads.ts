@@ -80,7 +80,8 @@ function generate(): void {
   const covers = buildCovers(model.buildings, graded, tracks.values());
   world.add(new THREE.Mesh(covers.frame, mats.covers), new THREE.Mesh(covers.glass, mats.glass));
 
-  const count = (s: JunctionShape['status']) => shapes.filter((j) => j.status === s).length;
+  // A join along one road (a lane drop, a split into two carriageways) is not an intersection, so it is counted apart.
+  const count = (s: JunctionShape['status']) => shapes.filter((j) => !j.seam && j.status === s).length;
   const tapers = model.report['roads.withLaneChanges'];
   hud.innerHTML = `
     <a class="back" href="../../">← labs</a>
@@ -91,7 +92,8 @@ function generate(): void {
       <tr><td>Roads with a lane-count taper</td><td>${tapers}</td></tr>
       <tr><td><span class="swatch" style="background:#3d8f5f"></span>Junctions solved cleanly</td><td>${count('ok')}</td></tr>
       <tr><td><span class="swatch" style="background:#d9862b"></span>Squeezed (arms too short)</td><td>${count('squeezed')}</td></tr>
-      <tr><td><span class="swatch" style="background:#b04bd1"></span>Shallow merges</td><td>${count('merge')}</td></tr>
+      <tr><td><span class="swatch" style="background:#b04bd1"></span>Intersections with a shallow merge</td><td>${count('merge')}</td></tr>
+      <tr><td><span class="swatch" style="background:#b04bd1"></span>Joins along a road</td><td>${shapes.filter((j) => j.seam).length}</td></tr>
       <tr><td>Generated in</td><td>${Math.round(performance.now() - t0)} ms</td></tr>
     </table>`;
 }

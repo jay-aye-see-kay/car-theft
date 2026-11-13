@@ -84,6 +84,10 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
   const LIFT = 0.04;
   const kh = p.kerbHeight;
 
+  // Ends of roads that have right of way through an intersection: their lines run up to it.
+  const free = new Set<string>();
+  for (const j of junctions) if (j.groups >= 3) for (const mo of j.mouths) if (!mo.stop) free.add(mo.track.road.id + mo.end);
+
   for (const t of all) {
     const sts = stations(t);
     if (sts.length < 2) continue;
@@ -140,7 +144,7 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
       elevated,
     );
 
-    markRoad(m, t, white, LIFT, index);
+    markRoad(m, t, white, LIFT, index, free.has(t.road.id + 'a'), free.has(t.road.id + 'b'));
   }
 
   for (const j of junctions) {
@@ -172,8 +176,9 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
       b.ribbon(far, far.map((pt) => ({ ...pt, h: pt.h - kh - DECK_DEPTH })), C.structure);
       b.ribbon(far, far.map((pt) => ({ ...pt, h: pt.h + 1.0 })), C.barrier);
     }
+    centreThrough(m, j, white, LIFT);
     // Only a real intersection stops anyone: three or more ways out.
-    if (j.groups >= 3) for (const mouth of j.mouths) stopLine(m, mouth.track, mouth.end, white, LIFT);
+    if (j.groups >= 3) for (const mouth of j.mouths) if (mouth.stop) stopLine(m, mouth.track, mouth.end, white, LIFT);
   }
 
   for (const piece of net.pavement.paved) pave(b, piece, kh);
@@ -224,11 +229,11 @@ function place(t: Track, s: number, lateral: (c: ReturnType<typeof sampleAt>) =>
   return { x: c.x - (c.ty / d) * l, y: c.y + (c.tx / d) * l, h: c.h + lift, c };
 }
 
-function markRoad(m: Builder, t: Track, white: RGB, lift: number, index: RoadIndex): void {
+function markRoad(m: Builder, t: Track, white: RGB, lift: number, index: RoadIndex, freeA: boolean, freeB: boolean): void {
   if (t.cls === 'lane') return;
   // Lines stop short of an intersection and run straight through a seam.
-  const from = t.thruA ? 0 : t.cutA + 1.5;
-  const to = t.thruB ? t.length : t.length - t.cutB - 1.5;
+  const from = t.thruA ? 0 : t.cutA + (freeA ? 0 : 1.5);
+  const to = t.thruB ? t.length : t.length - t.cutB - (freeB ? 0 : 1.5);
   if (to - from < 6) return;
   const lw = t.laneWidth;
   const W = 0.14;
@@ -289,6 +294,46 @@ function markRoad(m: Builder, t: Track, white: RGB, lift: number, index: RoadInd
     solid((c) => (c.wF + c.wB) / 2, true);
     solid((c) => -(c.wF + c.wB) / 2, true);
   }
+}
+
+/** Where one two-way road has right of way through an intersection, its centre line carries on across. */
+function centreThrough(m: Builder, j: JunctionShape, white: RGB, lift: number): void {
+  const through = j.mouths.filter((mo) => !mo.stop);
+  if (j.groups < 3 || through.length !== 2) return;
+  if (through.some((mo) => mo.track.oneWay || mo.track.cls === 'lane' || mo.track.cls === 'motorway' || mo.track.cls === 'ramp')) return;
+  const ends = through.map((mo) => {
+    const t = mo.track;
+    const q = place(t, mo.end === 'a' ? t.cutA : t.length - t.cutB, (c) => (c.wB - c.wF) / 2, lift);
+    const d = Math.hypot(q.c.tx, q.c.ty) || 1;
+    // Heading into the junction.
+    const sign = mo.end === 'a' ? -1 : 1;
+    return { q, dx: (q.c.tx / d) * sign, dy: (q.c.ty / d) * sign };
+  });
+  const [a, b] = ends;
+  const gap = Math.hypot(b.q.x - a.q.x, b.q.y - a.q.y);
+  if (gap < 1 || gap > 80) return;
+  const k = gap * 0.35;
+  const at = (v: number): P3 => {
+    const w = 1 - v;
+    const [c1x, c1y, c2x, c2y] = [a.q.x + a.dx * k, a.q.y + a.dy * k, b.q.x + b.dx * k, b.q.y + b.dy * k];
+    return {
+      x: w * w * w * a.q.x + 3 * w * w * v * c1x + 3 * w * v * v * c2x + v * v * v * b.q.x,
+      y: w * w * w * a.q.y + 3 * w * w * v * c1y + 3 * w * v * v * c2y + v * v * v * b.q.y,
+      h: a.q.h + (b.q.h - a.q.h) * v,
+    };
+  };
+  const n = Math.max(2, Math.ceil(gap / 1.5));
+  const pts = Array.from({ length: n + 1 }, (_, i) => at(i / n));
+  const W = 0.14;
+  const side = (s: number): P3[] =>
+    pts.map((q, i) => {
+      const [p0, p1] = [pts[Math.max(0, i - 1)], pts[Math.min(n, i + 1)]];
+      const d = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1;
+      return { x: q.x - ((p1.y - p0.y) / d) * s, y: q.y + ((p1.x - p0.x) / d) * s, h: q.h };
+    });
+  const dashed = through.every((mo) => mo.track.cls === 'street');
+  // Dashes of two segments in every six, about 3 m in 9.
+  m.ribbon(side(W / 2), side(-W / 2), white, dashed ? (i) => i % 6 < 2 : undefined);
 }
 
 function stopLine(m: Builder, t: Track, end: 'a' | 'b', white: RGB, lift: number): void {

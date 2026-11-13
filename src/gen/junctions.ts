@@ -33,7 +33,8 @@ export interface JunctionShape {
   /** `deck` is true where both arms are on a structure, so the edge between them is too. */
   fillets: { pts: P3[]; footpath: boolean; deck: boolean }[];
   /** Where each arm meets the junction, for stop lines. */
-  mouths: { track: Track; end: 'a' | 'b' }[];
+  /** `stop` is false for the road that has right of way through the junction: no stop line is painted across it. */
+  mouths: { track: Track; end: 'a' | 'b'; stop: boolean }[];
   status: JunctionStatus;
   /** True if any of its edges is on a structure: it needs an underside. */
   deck: boolean;
@@ -178,6 +179,44 @@ const alongside = (a: Arm, b: Arm): boolean => {
   const cross = Math.abs(a.dx * b.dy - a.dy * b.dx);
   return cross < PARALLEL || (a.dx * b.dx + a.dy * b.dy > 0 && cross < ALONGSIDE);
 };
+
+const RANK: Record<string, number> = { motorway: 5, ramp: 5, arterial: 4, collector: 3, street: 2, lane: 1 };
+
+/**
+ * The groups of arms that have right of way: two ways out that lie nearly opposite each other, where the
+ * junction is a side road ending on a road that carries on (a T), or minor roads crossing a bigger one.
+ * Anywhere else everyone stops, as at traffic lights.
+ */
+function rightOfWay(arms: Arm[], groups: number): Set<number> {
+  const none = new Set<number>();
+  if (groups < 3) return none;
+  const ids = [...new Set(arms.map((a) => a.group))];
+  const dir = new Map<number, [number, number]>();
+  const rank = new Map<number, number>();
+  for (const g of ids) {
+    const of = arms.filter((a) => a.group === g);
+    const [x, y] = [of.reduce((n, a) => n + a.dx, 0), of.reduce((n, a) => n + a.dy, 0)];
+    const d = Math.hypot(x, y) || 1;
+    dir.set(g, [x / d, y / d]);
+    rank.set(g, Math.max(...of.map((a) => RANK[a.t.cls])));
+  }
+  let best: [number, number] | undefined;
+  let straightest = Math.cos((150 * Math.PI) / 180);
+  for (const g of ids)
+    for (const h of ids) {
+      if (h <= g) continue;
+      const cos = dir.get(g)![0] * dir.get(h)![0] + dir.get(g)![1] * dir.get(h)![1];
+      if (cos < straightest) [straightest, best] = [cos, [g, h]];
+    }
+  if (!best) return none;
+  const pair = best;
+  const through = Math.min(rank.get(pair[0])!, rank.get(pair[1])!);
+  const others = ids.filter((g) => !pair.includes(g)).map((g) => rank.get(g)!);
+  // A T gives way to the road it ends on unless the side road is the bigger one; at a crossing the
+  // through road has to be the bigger.
+  const yields = ids.length === 3 ? others.every((r) => r <= through) : others.every((r) => r < through);
+  return yields ? new Set(pair) : none;
+}
 
 /** Everything a junction could be before its arms are cut back: what the cuts were measured against. */
 interface Body {
@@ -452,6 +491,7 @@ export function solveJunctions(plans: Map<string, JunctionPlan>, p: RoadParams):
       };
     });
 
+    const free = rightOfWay(arms, plan.groups);
     if (!plan.seam) {
       const shape = outline(body!, arms, mouths);
       shapes.push({
@@ -459,7 +499,7 @@ export function solveJunctions(plans: Map<string, JunctionPlan>, p: RoadParams):
         pieces: shape.pieces,
         islands: shape.islands,
         fillets: shape.fillets,
-        mouths: arms.map((a) => ({ track: a.t, end: a.end })),
+        mouths: arms.map((a) => ({ track: a.t, end: a.end, stop: !free.has(a.group) })),
         status,
         deck: shape.fillets.some((f) => f.deck),
         x: j.x,
@@ -521,7 +561,7 @@ export function solveJunctions(plans: Map<string, JunctionPlan>, p: RoadParams):
       pieces,
       islands: [],
       fillets,
-      mouths: arms.map((a) => ({ track: a.t, end: a.end })),
+      mouths: arms.map((a) => ({ track: a.t, end: a.end, stop: !free.has(a.group) })),
       status,
       deck: fillets.some((f) => f.deck),
       x: j.x,
