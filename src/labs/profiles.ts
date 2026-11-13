@@ -9,6 +9,8 @@ import { loadTile } from '../model/load.ts';
 import { ProfileContext } from '../profile/context.ts';
 import { PROFILES } from '../profile/library.ts';
 import { type Level, clearResolved, leaves } from '../profile/resolve.ts';
+import { cellsOf } from '../gen/cells.ts';
+import { checkCells } from '../gen/site.ts';
 import { fromNztm } from '../geo/nztm.ts';
 import { createDrive, createStage, lookAtLatLon } from '../view/stage.ts';
 import { World } from '../view/world.ts';
@@ -53,7 +55,7 @@ function renderHud(): void {
     <a class="back" href="../../">← labs</a>
     <h1>Place profiles · ${model.title}</h1>
     <p>Each point resolves base → region → district (planning zone) → place → override, and every generator reads the result. Click anything to see why it is the way it is.</p>
-    <p class="detail">${ctx.profiles.length} distinct resolved profiles. Placed: ${kits}.</p>
+    <p class="detail">${ctx.profiles.length} distinct resolved profiles. ${world.stats.cells.loaded} of ${world.stats.cells.total} cells (200 m) generated around the view; in them: ${kits}.</p>
     ${world.stamps.map(({ spec, run }) => `<p class="detail">Stamp: ${spec.name}, a ${(world.surface.at(...run[0]) - world.surface.at(...run[run.length - 1])).toFixed(0)} m drop.</p>`).join('')}
     <div class="legend">${legend}</div>
     <p class="detail">${drive.on ? '<b>Driving:</b> WASD or arrows.' : 'Drag to pan, right-drag to orbit, click to inspect.'}</p>`;
@@ -140,7 +142,28 @@ else {
 }
 world.rebuildBuildings();
 renderHud();
+// Cells load a few per frame as the view moves; refresh the HUD at most a few times a second.
+let hudDue = 0;
+world.onCells = () => {
+  if (hudDue) return;
+  hudDue = window.setTimeout(() => ((hudDue = 0), renderHud()), 300);
+};
 stage.onFrame(() => world.follow());
+
+// ?check (a sample of cells) or ?check=all: generate cells alone and from reordered data, and compare with the whole tile.
+if (query.has('check')) {
+  const all = cellsOf(model);
+  const cells = query.get('check') === 'all' ? all : all.filter((_, i) => i % Math.max(1, Math.floor(all.length / 12)) === 0);
+  const t0 = performance.now();
+  const results = checkCells(world.site!, cells);
+  const ms = Math.round(performance.now() - t0);
+  console.log('checkCells', JSON.stringify(results));
+  panel.innerHTML = `<button class="close" id="close">×</button><h2>Cell check</h2><p>${cells.length} of ${all.length} cells, each generated three ways, in ${ms} ms.</p>${results
+    .map((r) => `<p><b>${r.name}</b>: ${r.differ ? `${r.differ} of ${r.instances.toLocaleString()} instances differ` : `all ${r.instances.toLocaleString()} instances identical`}.</p>${r.examples.map((e) => `<p class="detail"><code>${e}</code></p>`).join('')}`)
+    .join('')}`;
+  panel.hidden = false;
+  document.getElementById('close')!.onclick = () => (panel.hidden = true);
+}
 
 const gui = new GUI({ title: 'Profiles' });
 if (innerWidth < 700) gui.close();

@@ -1,21 +1,23 @@
-// Builds a whole tile into the stage: graded terrain, roads, covers, buildings (facades near the
-// view, boxes beyond), street furniture and everything the profiles scatter. Shared by the look,
-// buildings and profiles labs; they differ only in the profile context they pass in.
+// Builds a tile into the stage in two stages. The tile stage, all at once: graded terrain, roads,
+// covers, stamps and buildings (facades near the view, boxes beyond). The cell stage, around the view
+// as it moves: street furniture and everything the profiles scatter (see gen/cells.ts). Shared by the
+// look, buildings and profiles labs; they differ only in the profile context they pass in.
 import * as THREE from 'three';
 import { buildMassing } from '../gen/buildings.ts';
 import { buildCovers } from '../gen/covers.ts';
 import { buildFacades } from '../gen/facade.ts';
 import { solveJunctions } from '../gen/junctions.ts';
 import { buildRoadMeshes } from '../gen/roadMesh.ts';
-import { type Instance, occupancy, scatter } from '../gen/scatter.ts';
-import { furnishStreets } from '../gen/street.ts';
+import { type Instance, occupancy } from '../gen/scatter.ts';
+import type { Site } from '../gen/site.ts';
 import { type MapMode, buildTerrainGeometry, buildTerrainSkirt, gradeTerrain, paintGround } from '../gen/terrain.ts';
 import { DEFAULT_PARAMS, type Track, buildTrack, solveElevations } from '../gen/tracks.ts';
 import { centroid } from '../geo/poly.ts';
-import { type Kit, kits, toneColour } from '../kit/kits.ts';
+import { kits } from '../kit/kits.ts';
 import type { Heightfield } from '../model/load.ts';
 import type { Building, TileModel } from '../model/types.ts';
 import type { ProfileContext } from '../profile/context.ts';
+import { CellView } from './cells.ts';
 import type { Stage } from './stage.ts';
 import { type PlacedStamp, buildStamps, carveStamps, placeStamps } from './stamps.ts';
 
@@ -34,12 +36,12 @@ export interface WorldStats {
   trees: number;
   props: number;
   detail: number;
+  /** Cells generated right now, of the tile's total. */
+  cells: { loaded: number; total: number };
   /** Things placed, per kit. */
   kits: Record<string, number>;
   ms: Record<string, number>;
 }
-
-const TREE_KITS = new Set(['broadleaf', 'oak', 'plane', 'pohutukawa', 'kauri', 'nikau', 'palm', 'ponga', 'cabbage', 'shrub', 'flax', 'tussock']);
 
 export class World {
   readonly stage: Stage;
@@ -52,9 +54,10 @@ export class World {
   readonly group = new THREE.Group();
   readonly built = new THREE.Group();
   readonly focus = new THREE.Vector3(Infinity, 0, 0);
-  stats: WorldStats = { trees: 0, props: 0, detail: 0, kits: {}, ms: {} };
-  /** Everything placed by rules, for the inspector. */
-  placed: Instance[] = [];
+  stats: WorldStats = { trees: 0, props: 0, detail: 0, cells: { loaded: 0, total: 0 }, kits: {}, ms: {} };
+  readonly cells: CellView;
+  /** The tile stage's results, which the cells read. */
+  site?: Site;
   terrainMesh?: THREE.Mesh;
   stamps: PlacedStamp[] = [];
   buildingMeshes: { mesh: THREE.Mesh; buildings: Building[]; facades: boolean }[] = [];
@@ -75,6 +78,25 @@ export class World {
     this.solid = model.buildings.filter((b) => !b.cover);
     this.centres = this.solid.map((b) => centroid(b.ring));
     stage.scene.add(this.group, this.built);
+    this.cells = new CellView(stage);
+  }
+
+  /** Everything placed in the cells generated so far, for the inspector. */
+  get placed(): Instance[] {
+    return this.cells.placed();
+  }
+
+  /** Calls back whenever cells load or drop, e.g. to refresh a HUD. */
+  set onCells(f: () => void) {
+    this.cells.onChange = () => {
+      this.syncStats();
+      f();
+    };
+  }
+
+  private syncStats(): void {
+    const c = this.cells.stats;
+    Object.assign(this.stats, { trees: c.trees, props: c.props, kits: c.kits, cells: { loaded: c.loaded, total: c.total } });
   }
 
   /** Splits buildings into near (full facades) and far (boxes), around what the camera is looking at. */
@@ -103,10 +125,12 @@ export class World {
     }
   }
 
-  /** Rebuilds the buildings when the view has moved far enough. Call every frame. */
+  /** Rebuilds the buildings when the view has moved far enough, and generates the cells it now reaches. Call every frame. */
   follow(): void {
     const t = this.stage.controls.target;
     if (this.opts.detail && Math.hypot(t.x - this.focus.x, t.z - this.focus.z) > this.opts.detailRadius * 0.3) this.rebuildBuildings();
+    this.cells.update();
+    if (!this.cells.onChange) this.syncStats();
   }
 
   generate(): void {
@@ -185,79 +209,26 @@ export class World {
     this.rebuildBuildings();
     lap('buildings');
 
-    const kitCount: Record<string, number> = {};
-    const placed: Instance[] = [];
-    this.stats.props = 0;
-    if (opts.furniture) {
-      const props = furnishStreets(tracks.values(), junctions, DEFAULT_PARAMS, occupancy(model, [], 'buildings'), this.ctx);
-      this.stats.props = props.length;
-      for (const p of props) {
-        if (!opts.trees && TREE_KITS.has(p.kind)) continue;
-        placed.push({ kit: p.kind, x: p.x, y: p.y, h: p.h, size: p.size, tint: p.tint, yaw: p.yaw, lean: 0, leanDir: 0, tone: p.tone, profile: this.ctx.indexAt(p.x, p.y) });
-      }
-    }
-    lap('street');
-    let trees = 0;
-    if (opts.trees) {
+    // The cell stage reads all of this; cells are generated around the view by follow().
+    const clearings = this.stamps.map(({ run }) => run);
+    this.site = {
+      model,
+      ground: graded,
+      ctx: this.ctx,
+      roadCtx: this.ctx,
+      tracks: [...tracks.values()],
+      junctions,
+      occupied: occupancy(model, tracks.values()),
+      walls: occupancy(model, [], 'buildings'),
       // Trees stay out of the stamps (the falls and their pool) so they can be seen.
-      const occ = occupancy(model, tracks.values());
-      const nearStamp = (x: number, y: number) => this.stamps.some(({ run }) => run.some((p) => Math.hypot(p[0] - x, p[1] - y) < 14));
-      const found = scatter(model, graded, (x, y) => occ(x, y) || nearStamp(x, y), this.ctx);
-      for (const f of found) if (TREE_KITS.has(f.kit)) trees++;
-      for (const f of found) placed.push(f);
-    }
-    this.stats.trees = trees;
-    lap('scatter');
-    for (const p of placed) kitCount[p.kit] = (kitCount[p.kit] ?? 0) + 1;
-    this.placed = placed;
-    this.instance(placed);
-    lap('instancing');
-    this.stats.kits = kitCount;
+      clear: (x, y) => clearings.some((run) => run.some((p) => Math.hypot(p[0] - x, p[1] - y) < 14)),
+      trees: opts.trees,
+      furniture: opts.furniture,
+    };
+    this.cells.reset(this.site);
+    this.syncStats();
+    lap('site');
     this.stats.ms = ms;
-  }
-
-  /** One instanced mesh per kit shape, with lamp heads and pools alongside. */
-  private instance(placed: Instance[]): void {
-    const library = kits();
-    const groups = new Map<string, { kit: Kit; variant: number; list: Instance[] }>();
-    for (const p of placed) {
-      const kit = library.get(p.kit);
-      if (!kit) continue;
-      const variant = Math.floor(((p.tint * 9.17) % 1) * kit.variants.length);
-      const key = `${p.kit}#${variant}`;
-      let g = groups.get(key);
-      if (!g) groups.set(key, (g = { kit, variant, list: [] }));
-      g.list.push(p);
-    }
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const tilt = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
-    const axis = new THREE.Vector3();
-    const c = new THREE.Color();
-    const mats = this.stage.mats;
-    for (const { kit, variant, list } of groups.values()) {
-      const shapes: [THREE.BufferGeometry, THREE.Material, boolean][] = [[kit.variants[variant], kit.tone ? mats.trees : mats.covers, kit.shadow]];
-      if (kit.lamp && variant === 0) shapes.push([kit.lamp.head, mats.lampHeads, false], [kit.lamp.pool, mats.lampPools, false]);
-      for (const [geometry, material, shadow] of shapes) {
-        const mesh = new THREE.InstancedMesh(geometry, material, list.length);
-        list.forEach((p, i) => {
-          q.setFromAxisAngle(up, p.yaw);
-          if (p.lean) {
-            axis.set(Math.cos(p.leanDir), 0, -Math.sin(p.leanDir));
-            q.premultiply(tilt.setFromAxisAngle(axis, p.lean));
-          }
-          const stretch = 1 + (kit.stretch ?? 0) * (p.tint - 0.5);
-          // Things on a slope sink a little so their downhill side does not float.
-          m.compose(new THREE.Vector3(p.x, p.h - 0.2 * p.size, -p.y), q, new THREE.Vector3(p.size, p.size * stretch, p.size));
-          mesh.setMatrixAt(i, m);
-          if (kit.tone && material === mats.trees) mesh.setColorAt(i, toneColour(p.tone ?? kit.tone, p.tint, c));
-        });
-        mesh.castShadow = shadow;
-        mesh.receiveShadow = shadow;
-        this.group.add(mesh);
-      }
-    }
   }
 }
 

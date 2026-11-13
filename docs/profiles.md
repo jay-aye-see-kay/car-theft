@@ -49,8 +49,9 @@ building.
 
 ## Costs and loose ends
 
-- The Piha tile places about 330,000 instances, most of them bush shrub. It loads in about 4 s headless, but frame
-  rate on phones hasn't been measured.
+- The Piha tile places about 316,000 instances, most of them bush shrub. They're now generated in 200 m cells
+  around the view rather than all at once (see `docs/cells.md`), which cut a frame near the falls from 55M
+  triangles to 10M.
 - Swaps and layer toggles regenerate the whole tile; that's fine for a lab but not for a game.
 - Region outlines are rough rectangles.
 

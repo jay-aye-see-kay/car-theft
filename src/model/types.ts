@@ -112,6 +112,11 @@ export interface TileModel {
   /** NZTM easting and northing of the tile centre. */
   origin: { e: number; n: number };
   size: { x: number; y: number };
+  /**
+   * The part of the tile this model covers, if less than all of it: a crop keeps the tile's origin and
+   * coordinates, and only the features that reach into these bounds. See `cropModel`.
+   */
+  bounds?: { x0: number; y0: number; x1: number; y1: number };
   height: HeightInfo;
   roads: Road[];
   junctions: Junction[];

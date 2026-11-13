@@ -2,9 +2,10 @@
 // world-aligned jittered grid so the same spot always gets the same thing, in whatever order
 // things are generated. Density is shaped by distance to paths, streams and the coast, and by
 // slope and relief, so a rule can say "headstones crowd the paths" or "nīkau in the gullies".
-import { Grid, fillRing } from '../geo/raster.ts';
+import { type Bounds, Grid, fillRing, strokeLine } from '../geo/raster.ts';
+import { boundsOf, boxOf, inBounds, overlaps } from './cells.ts';
 import type { Heightfield } from '../model/load.ts';
-import type { TileModel } from '../model/types.ts';
+import type { Area, TileModel } from '../model/types.ts';
 import type { ProfileContext } from '../profile/context.ts';
 import type { Cover, Falloff, ScatterLayer, Tone } from '../profile/schema.ts';
 import { type Track, halfWidth } from './tracks.ts';
@@ -40,98 +41,72 @@ const falloff = (d: number, [a, b]: Falloff): number => {
 /** 1 inside the range, fading to 0 over `soft` beyond it. */
 const within = (v: number, [lo, hi]: [number, number], soft: number): number => Math.max(0, Math.min(1, 1 - Math.max(lo - v, v - hi, 0) / soft));
 
-/** A 2 m raster of everything a tree must not stand on: buildings, roads and footpaths. Or of just the roads, or just the buildings. */
+/**
+ * A 1 m raster of everything a tree must not stand on: buildings, roads and footpaths. Or of just the
+ * roads, or just the buildings. Drawn by our own rasteriser on the NZTM grid rather than a canvas, so the
+ * same data gives the same cells in a crop, another browser, a worker or the offline bake.
+ */
 export function occupancy(model: TileModel, tracks: Iterable<Track>, what: 'everything' | 'roads' | 'buildings' = 'everything'): (x: number, y: number) => boolean {
-  const cell = 2;
-  const cv = document.createElement('canvas');
-  cv.width = Math.ceil(model.size.x / cell);
-  cv.height = Math.ceil(model.size.y / cell);
-  const g = cv.getContext('2d', { willReadFrequently: true })!;
-  g.setTransform(1 / cell, 0, 0, -1 / cell, cv.width / 2, cv.height / 2);
-  g.fillStyle = g.strokeStyle = '#fff';
-  g.lineCap = g.lineJoin = 'round';
+  const g = Grid.over(boundsOf(model), 1, model.origin);
+  const mask = new Uint8Array(g.size);
   for (const b of what === 'roads' ? [] : model.buildings) {
-    g.beginPath();
-    b.ring.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-    g.closePath();
-    g.fill();
-    g.lineWidth = 3;
-    g.stroke();
+    fillRing(g, b.ring, (c) => (mask[c] = 1));
+    strokeLine(g, [...b.ring, b.ring[0]], 1.5, mask);
   }
   for (const a of what === 'everything' ? model.areas : []) {
-    if (a.kind !== 'pitch' && a.kind !== 'water' && a.kind !== 'parking' && a.kind !== 'plaza') continue;
-    g.beginPath();
-    a.ring.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-    g.closePath();
-    g.fill();
+    if (a.kind === 'pitch' || a.kind === 'water' || a.kind === 'parking' || a.kind === 'plaza') fillRing(g, a.ring, (c) => (mask[c] = 1));
   }
   for (const t of what === 'buildings' ? [] : tracks) {
-    g.beginPath();
-    for (let i = 0; i < t.n; i++) {
-      if (i) g.lineTo(t.x[i], t.y[i]);
-      else g.moveTo(t.x[i], t.y[i]);
-    }
-    g.lineWidth = 2 * halfWidth(t, t.n >> 1) + 9;
-    g.stroke();
+    const pts: [number, number][] = [];
+    for (let i = 0; i < t.n; i++) pts.push([t.x[i], t.y[i]]);
+    strokeLine(g, pts, halfWidth(t, t.n >> 1) + 4.5, mask);
   }
-  for (const p of what === 'everything' ? model.paths : []) {
-    g.beginPath();
-    p.pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-    g.lineWidth = 4;
-    g.stroke();
-  }
-  const px = g.getImageData(0, 0, cv.width, cv.height).data;
+  for (const p of what === 'everything' ? model.paths : []) strokeLine(g, p.pts, 2, mask);
   return (x, y) => {
-    const c = Math.floor(x / cell + cv.width / 2);
-    const r = Math.floor(cv.height / 2 - y / cell);
-    if (c < 0 || r < 0 || c >= cv.width || r >= cv.height) return what === 'everything';
-    return px[(r * cv.width + c) * 4] > 60;
+    const c = g.index(x, y);
+    return c < 0 ? what === 'everything' : mask[c] === 1;
   };
 }
 
-export interface ScatterStats {
-  /** Instances per kit. */
-  kits: Record<string, number>;
+/** An integer salt from a stable id, so a rebake that adds or reorders areas leaves the others alone. */
+function saltOf(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  return (h >>> 0) % 1000003;
 }
 
-export function scatter(model: TileModel, ground: Heightfield, blocked: (x: number, y: number) => boolean, ctx: ProfileContext, seed = 1): Instance[] {
+/**
+ * Everything the profiles scatter inside one cell. Each rule draws a jittered grid whose points sit on
+ * NZTM, so a point's fate depends only on where it is: the same tree stands there whichever cell, crop or
+ * tile generated it. Points belong to the cell their jittered position lands in.
+ */
+export function scatterCell(model: TileModel, ground: Heightfield, blocked: (x: number, y: number) => boolean, ctx: ProfileContext, cell: Bounds, seed = 1): Instance[] {
   const out: Instance[] = [];
-  const mg = new Grid(model.size.x, model.size.y, 2);
-  // Every mapped area is a source, and so is all the land no area covers.
-  const sources: { kind: Cover; ring?: (typeof model.areas)[number]['ring']; salt: number }[] = model.areas.map((a, salt) => ({ kind: a.kind, ring: a.ring, salt }));
+  const { e, n } = model.origin;
+  const present = ctx.profilesIn(cell);
+  // Every mapped area that reaches the cell is a source, and so is the land no area covers.
+  const sources: { kind: Cover; area?: Area; salt: number }[] = model.areas.filter((a) => overlaps(boxOf(a.ring), cell)).map((a) => ({ kind: a.kind, area: a, salt: saltOf(a.id) }));
   sources.push({ kind: 'open', salt: 7777 });
-  // One stamp raster shared by every source: a source fills its own number in, then tests for it.
-  const stamp = new Int32Array(mg.size);
-  let n = 0;
 
   for (const src of sources) {
-    const present = ctx.profilesIn(src.ring);
-    const wanted = present.filter((i) => ctx.profiles[i].value.cover[src.kind]?.length);
-    if (!wanted.length) continue;
-    let [x0, y0, x1, y1] = [-model.size.x / 2, -model.size.y / 2, model.size.x / 2, model.size.y / 2];
-    let inside: (x: number, y: number) => boolean;
-    if (src.ring) {
-      [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
-      for (const [x, y] of src.ring) [x0, y0, x1, y1] = [Math.min(x0, x), Math.min(y0, y), Math.max(x1, x), Math.max(y1, y)];
-      const mine = ++n;
-      fillRing(mg, src.ring, (c) => (stamp[c] = mine));
-      inside = (x, y) => stamp[mg.index(x, y)] === mine;
-    } else {
-      inside = (x, y) => ctx.coverAt(x, y) === 'open';
-    }
-    for (const pi of wanted) {
-      const layers = ctx.profiles[pi].value.cover[src.kind]!;
+    const inside = src.area ? (x: number, y: number) => ctx.areaAt(x, y) === src.area : (x: number, y: number) => !ctx.areaAt(x, y);
+    const box = src.area ? boxOf(src.area.ring) : cell;
+    const [x0, y0, x1, y1] = [Math.max(cell.x0, box.x0), Math.max(cell.y0, box.y0), Math.min(cell.x1, box.x1), Math.min(cell.y1, box.y1)];
+    for (const pi of present) {
+      const layers = ctx.profiles[pi].value.cover[src.kind];
+      if (!layers?.length) continue;
       layers.forEach((L: ScatterLayer, li) => {
         const step = L.spacing;
         const s0 = seed + src.salt + li * 1000003;
         const s1 = li * 7919;
         const shaped = !!(L.near || L.slope || L.relief);
-        for (let iy = Math.floor(y0 / step); iy <= Math.ceil(y1 / step); iy++) {
-          for (let ix = Math.floor(x0 / step); ix <= Math.ceil(x1 / step); ix++) {
+        // Grid indices in NZTM; jitter keeps a point within its own grid square, so one square either side is enough.
+        for (let iy = Math.floor((y0 + n) / step) - 1; iy <= Math.ceil((y1 + n) / step); iy++) {
+          for (let ix = Math.floor((x0 + e) / step) - 1; ix <= Math.ceil((x1 + e) / step); ix++) {
             if (hash(ix, iy, s0) > L.chance) continue;
-            const x = (ix + 0.15 + 0.7 * hash(ix, iy, seed + 101 + s1)) * step;
-            const y = (iy + 0.15 + 0.7 * hash(ix, iy, seed + 202 + s1)) * step;
-            if (!inside(x, y) || ctx.indexAt(x, y) !== pi || blocked(x, y)) continue;
+            const x = (ix + 0.15 + 0.7 * hash(ix, iy, seed + 101 + s1)) * step - e;
+            const y = (iy + 0.15 + 0.7 * hash(ix, iy, seed + 202 + s1)) * step - n;
+            if (!inBounds(cell, x, y) || !inside(x, y) || ctx.indexAt(x, y) !== pi || blocked(x, y)) continue;
             if (shaped) {
               let d = 1;
               for (const [k, f] of Object.entries(L.near ?? {})) d *= falloff(ctx.sample(k as 'path', x, y), f as Falloff);

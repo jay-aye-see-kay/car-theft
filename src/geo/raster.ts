@@ -2,6 +2,14 @@
 // distance fields, slope and relief. No canvas, so they run anywhere.
 import type { Pt } from '../model/types.ts';
 
+/** A rectangle in tile coordinates: metres from the tile centre, x east, y north. */
+export interface Bounds {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
 export class Grid {
   readonly cols: number;
   readonly rows: number;
@@ -10,12 +18,23 @@ export class Grid {
   readonly x0: number;
   readonly y0: number;
 
-  constructor(sizeX: number, sizeY: number, cell: number) {
+  constructor(x0: number, y0: number, cols: number, rows: number, cell: number) {
     this.cell = cell;
-    this.cols = Math.ceil(sizeX / cell);
-    this.rows = Math.ceil(sizeY / cell);
-    this.x0 = -sizeX / 2;
-    this.y0 = -sizeY / 2;
+    this.cols = cols;
+    this.rows = rows;
+    this.x0 = x0;
+    this.y0 = y0;
+  }
+
+  /**
+   * A grid covering `b`, with its cell edges on whole multiples of `cell` in NZTM rather than in tile
+   * coordinates. So any two grids of the same cell size, from different tiles or from a crop of one,
+   * put their cells in the same places and rasterise the same data to the same values.
+   */
+  static over(b: Bounds, cell: number, origin: { e: number; n: number }): Grid {
+    const x0 = Math.floor((b.x0 + origin.e) / cell) * cell - origin.e;
+    const y0 = Math.floor((b.y0 + origin.n) / cell) * cell - origin.n;
+    return new Grid(x0, y0, Math.ceil((b.x1 - x0) / cell), Math.ceil((b.y1 - y0) / cell), cell);
   }
 
   get size(): number {
@@ -90,11 +109,14 @@ export function strokeLine(g: Grid, pts: Pt[], half: number, mask: Uint8Array): 
   }
 }
 
-/** Metres from each cell to the nearest marked cell (two-pass chamfer). Unmarked grids give Infinity. */
+/** Distance standing in for "nothing marked anywhere": finite, so bilinear sampling never makes NaN of it (Infinity × 0). */
+export const FAR = 1e9;
+
+/** Metres from each cell to the nearest marked cell (two-pass chamfer). Unmarked grids give FAR. */
 export function distanceField(g: Grid, seeds: Uint8Array): Float32Array {
   const { cols, rows, cell } = g;
   const d = new Float32Array(cols * rows);
-  for (let i = 0; i < d.length; i++) d[i] = seeds[i] ? 0 : Infinity;
+  for (let i = 0; i < d.length; i++) d[i] = seeds[i] ? 0 : FAR;
   const [a, b] = [cell, cell * Math.SQRT2];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {

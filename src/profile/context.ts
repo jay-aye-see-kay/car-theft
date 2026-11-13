@@ -1,8 +1,9 @@
 // The profile map for one tile: which layers cover every point, the resolved profile there, and
 // the terrain fields scatter rules read (distance to paths, streams and the coast; slope; relief).
 import { toNztm } from '../geo/nztm.ts';
-import { centroid, pointInRing } from '../geo/poly.ts';
-import { Grid, boxBlur, distanceField, fillRing, strokeLine } from '../geo/raster.ts';
+import { centroid, pointInRing, ringArea } from '../geo/poly.ts';
+import { type Bounds, Grid, boxBlur, distanceField, fillRing, strokeLine } from '../geo/raster.ts';
+import { boundsOf } from '../gen/cells.ts';
 import { type Style, styleByName, useOf } from '../gen/styles.ts';
 import type { Heightfield } from '../model/load.ts';
 import type { Area, Building, Pt, Road, TileModel, Zone } from '../model/types.ts';
@@ -15,6 +16,11 @@ export interface ContextOptions {
   levels?: Iterable<Level>;
   /** Replace one profile with another wherever it is assigned. */
   swaps?: Record<string, string>;
+  /**
+   * Where to read the fields that reach too far for a crop to compute: distance to the coast. A context
+   * built on a crop passes the whole tile's context here, standing in for a field baked for the region.
+   */
+  regional?: ProfileContext;
 }
 
 interface PlaceSource {
@@ -86,6 +92,7 @@ export class ProfileContext {
   private readonly fieldGrid: Grid;
   private readonly fields = new Map<FieldName, Float32Array>();
   private readonly choices = new Map<string, StyleChoice>();
+  private readonly regional?: ProfileContext;
 
   constructor(model: TileModel, ground: Heightfield, opts: ContextOptions = {}) {
     this.model = model;
@@ -93,9 +100,11 @@ export class ProfileContext {
     this.levels = new Set(opts.levels ?? []);
     this.levels.add('base');
     this.swaps = opts.swaps ?? {};
+    this.regional = opts.regional;
     if (this.levels.has('override')) for (const o of OVERRIDES) this.overrides.set(o.target, o);
-    const g = (this.grid = new Grid(model.size.x, model.size.y, 4));
-    this.fieldGrid = new Grid(model.size.x, model.size.y, 2);
+    const bounds = boundsOf(model);
+    const g = (this.grid = Grid.over(bounds, 4, model.origin));
+    this.fieldGrid = Grid.over(bounds, 2, model.origin);
     this.cells = new Int32Array(g.size);
     this.regionAt = new Int8Array(g.size).fill(-1);
     this.zoneAt = new Int32Array(g.size).fill(-1);
@@ -109,11 +118,22 @@ export class ProfileContext {
       });
     this.regions = REGIONS.map((r) => ({ ...r, ring: local(r.outline) }));
     if (this.levels.has('region')) this.regions.forEach((r, i) => fillRing(g, r.ring, (c) => (this.regionAt[c] = i)));
-    if (this.levels.has('district')) (model.zones ?? []).forEach((z, i) => fillRing(g, z.ring, (c) => (this.zoneAt[c] = i)));
-    model.areas.forEach((a, i) => fillRing(g, a.ring, (c) => (this.coverAt_[c] = i)));
+    if (this.levels.has('district')) {
+      // Zones overlap at their edges and where the coastal marine zone runs over land: the smaller one
+      // wins, whatever order the data came in.
+      const zones = (model.zones ?? []).map((z, i) => ({ z, i, size: Math.abs(ringArea(z.ring)) }));
+      zones.sort((p, q) => q.size - p.size || (p.z.id < q.z.id ? -1 : 1));
+      for (const { z, i } of zones) fillRing(g, z.ring, (c) => (this.zoneAt[c] = i));
+    }
+    // Where mapped areas overlap, the smaller one is the ground cover (a pitch in a park, a wood in a
+    // reserve). Filling largest first makes that so whatever order the data came in.
+    const bySize = model.areas.map((a, i) => ({ a, i, size: Math.abs(ringArea(a.ring)) }));
+    bySize.sort((p, q) => q.size - p.size || (p.a.id < q.a.id ? -1 : 1));
+    for (const { a, i } of bySize) fillRing(g, a.ring, (c) => (this.coverAt_[c] = i));
 
     if (this.levels.has('place')) {
-      for (const a of model.areas) {
+      // Places too: smaller mapped places win over the ones they sit in, and hand-drawn places win over all.
+      for (const { a } of bySize) {
         const forced = this.overrides.get(`area:${a.id}`);
         const region = this.regionOf(this.interior(a.ring));
         const rule = AREA_RULES.find((r) => r.kind === a.kind && (!r.name || r.name.test(a.name ?? '')) && (!r.region || r.region === region?.id));
@@ -171,8 +191,12 @@ export class ProfileContext {
   }
 
   private cellAt(x: number, y: number): number {
-    const c = this.grid.index(x, y);
-    return c < 0 ? this.grid.index(Math.max(this.grid.x0 + 1, Math.min(-this.grid.x0 - 1, x)), Math.max(this.grid.y0 + 1, Math.min(-this.grid.y0 - 1, y))) : c;
+    const g = this.grid;
+    const c = g.index(x, y);
+    if (c >= 0) return c;
+    const cx = Math.max(0, Math.min(g.cols - 1, Math.floor((x - g.x0) / g.cell)));
+    const cy = Math.max(0, Math.min(g.rows - 1, Math.floor((y - g.y0) / g.cell)));
+    return cy * g.cols + cx;
   }
 
   indexAt(x: number, y: number): number {
@@ -181,6 +205,12 @@ export class ProfileContext {
 
   at(x: number, y: number): ResolvedProfile {
     return this.profiles[this.indexAt(x, y)];
+  }
+
+  /** The mapped area that is the ground cover here, if any. */
+  areaAt(x: number, y: number): Area | undefined {
+    const a = this.coverAt_[this.cellAt(x, y)];
+    return a < 0 ? undefined : this.model.areas[a];
   }
 
   coverAt(x: number, y: number): Cover {
@@ -204,11 +234,13 @@ export class ProfileContext {
     };
   }
 
-  /** The resolved profiles found anywhere inside a ring, or anywhere with no mapped area if no ring. */
-  profilesIn(ring?: Pt[]): number[] {
+  /** The resolved profiles found anywhere in a rectangle. */
+  profilesIn(b: Bounds): number[] {
+    const g = this.grid;
     const found = new Set<number>();
-    if (ring) fillRing(this.grid, ring, (c) => found.add(this.cells[c]));
-    else for (let c = 0; c < this.grid.size; c++) if (this.coverAt_[c] < 0) found.add(this.cells[c]);
+    const [c0, c1] = [Math.max(0, Math.floor((b.x0 - g.x0) / g.cell)), Math.min(g.cols - 1, Math.floor((b.x1 - g.x0) / g.cell))];
+    const [r0, r1] = [Math.max(0, Math.floor((b.y0 - g.y0) / g.cell)), Math.min(g.rows - 1, Math.floor((b.y1 - g.y0) / g.cell))];
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) found.add(this.cells[r * g.cols + c]);
     return [...found];
   }
 
@@ -291,6 +323,7 @@ export class ProfileContext {
   }
 
   sample(name: FieldName, x: number, y: number): number {
+    if (name === 'coast' && this.regional) return this.regional.sample(name, x, y);
     return this.fieldGrid.sample(this.field(name), x, y);
   }
 

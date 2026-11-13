@@ -39,7 +39,7 @@ function renderHud(): void {
     <a class="back" href="../../">← labs</a>
     <h1>${TITLE}</h1>
     <p>${lab === 'buildings' ? 'Every building within reach of the view is grown from its footprint and height by one small grammar: walls, floors, bays, then windows, shopfronts, awnings and roofs. Farther ones stay as boxes on the same grid.' : look.about}</p>
-    <p class="detail">${opts.detail ? `${s.detail} buildings with built facades right now. ` : ''}${s.trees.toLocaleString()} trees placed by land type${s.props ? `, ${s.props.toLocaleString()} lamps, street trees and signals by street type` : ''}.
+    <p class="detail">${opts.detail ? `${s.detail} buildings with built facades right now. ` : ''}${s.trees.toLocaleString()} trees placed by land type in the ${s.cells.loaded} cells around the view${s.props ? `, ${s.props.toLocaleString()} lamps, street trees and signals by street type` : ''}.
     ${drive.on ? '<b>Driving:</b> WASD or arrows, or drag on a touch screen. Shift is faster.' : 'Drag to pan, right-drag or two fingers to orbit.'}</p>`;
 }
 
@@ -69,6 +69,7 @@ else go(...(PLACES[0].slice(1) as [number, number, number, number]));
 world.rebuildBuildings();
 if (query.has('drive')) drive.set(true);
 renderHud();
+world.onCells = renderHud;
 stage.onFrame(() => {
   const before = world.stats.detail;
   world.follow();
