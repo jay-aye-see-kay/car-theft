@@ -229,6 +229,8 @@ interface Body {
 
 /** Probes this far outside an arm's kerb must be clear of the junction for the arm to start. */
 const CLEAR = 0.25;
+/** How much further an arm may be cut back so a kerb curve runs into its kerb without a kink. */
+const TANGENT = 1.5;
 /** A median nose reaches this far up the arms past their cuts. */
 const NOSE = 6;
 /** Inlets in a junction's outline narrower than twice this are paved over as islands. */
@@ -288,15 +290,24 @@ function solveCuts(arms: Arm[], node: Junction, p: RoadParams): Body {
       if (k !== i && !alongside(a, b)) others = others.union(stubs[k]);
     });
     const least = Math.min(1, a.t.length * 0.3);
-    let cut = -1;
-    for (let s = 0; s <= a.maxCut; s += 0.5) {
+    const clear = (s: number, by: number): boolean => {
       const f = frame(a, s);
-      const w = f.hw + CLEAR;
-      if (!others.contains(f.x - f.dy * w, f.y + f.dx * w) && !others.contains(f.x + f.dy * w, f.y - f.dx * w)) {
+      const w = f.hw + by;
+      return !others.contains(f.x - f.dy * w, f.y + f.dx * w) && !others.contains(f.x + f.dy * w, f.y - f.dx * w);
+    };
+    let cut = -1;
+    for (let s = 0; s <= a.maxCut; s += 0.5)
+      if (clear(s, CLEAR)) {
         cut = s;
         break;
       }
-    }
+    // A little further on, the kerb curve has all but met the arm's kerb, and runs smoothly into it
+    // instead of meeting it at an angle. Not worth a much longer cut.
+    for (let s = cut + 0.25; cut >= 0 && s <= Math.min(a.maxCut, cut + TANGENT); s += 0.25)
+      if (clear(s, CLEAR / 3)) {
+        cut = s;
+        break;
+      }
     if (cut < 0) {
       cut = a.maxCut;
       squeezed = true;
