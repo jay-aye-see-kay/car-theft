@@ -154,9 +154,106 @@ export function interpretAreas(data: OsmData, bounds: Rect): Area[] {
   return areas.sort((a, b) => Math.abs(ringArea(b.ring)) - Math.abs(ringArea(a.ring)));
 }
 
-export function interpretPaths(data: OsmData, bounds: Rect): { paths: Path[]; report: Record<string, number> } {
+/** A path keeps to a road's side for at least this far before it counts as that road's footpath. */
+const ROADSIDE_RUN = 15;
+
+/**
+ * For a point on a path heading (dx, dy): the nearest spot on the centreline of a road that has its
+ * own footpath, if the path is running along beside that road, close enough to be its footpath.
+ */
+function roadsideTest(roads: Road[]): (p: Pt, dx: number, dy: number) => Pt | undefined {
+  const CELL = 24;
+  const cells = new Map<number, { a: Pt; b: Pt; reach: number }[]>();
+  for (const r of roads) {
+    if (!r.footpath) continue;
+    let s = 0;
+    for (let i = 1; i < r.pts.length; i++) {
+      const [a, b] = [r.pts[i - 1], r.pts[i]];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const sec = r.sections.find((x) => s + len / 2 <= x.s1) ?? r.sections[r.sections.length - 1];
+      s += len;
+      if (!sec || sec.level !== 0) continue;
+      // Half the carriageway, its footpath, and the width of a verge beyond.
+      const seg = { a, b, reach: ((sec.lanesF + sec.lanesB) * 3.3) / 2 + 1 + 2.6 + 3 };
+      for (let cx = Math.floor((Math.min(a[0], b[0]) - seg.reach) / CELL); cx <= Math.floor((Math.max(a[0], b[0]) + seg.reach) / CELL); cx++)
+        for (let cy = Math.floor((Math.min(a[1], b[1]) - seg.reach) / CELL); cy <= Math.floor((Math.max(a[1], b[1]) + seg.reach) / CELL); cy++) {
+          const k = cx * 65536 + cy;
+          let list = cells.get(k);
+          if (!list) cells.set(k, (list = []));
+          list.push(seg);
+        }
+    }
+  }
+  return (p, dx, dy) => {
+    let best: Pt | undefined;
+    let bestD = Infinity;
+    for (const { a, b, reach } of cells.get(Math.floor(p[0] / CELL) * 65536 + Math.floor(p[1] / CELL)) ?? []) {
+      const [ex, ey] = [b[0] - a[0], b[1] - a[1]];
+      const len = Math.hypot(ex, ey) || 1;
+      // Within about 30 degrees of the road's own heading.
+      if (Math.abs(ex * dx + ey * dy) / len < 0.87) continue;
+      const u = Math.min(1, Math.max(0, ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / len / len));
+      const q: Pt = [a[0] + ex * u, a[1] + ey * u];
+      const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+      if (d < reach && d < bestD) [best, bestD] = [q, d];
+    }
+    return best;
+  };
+}
+
+/**
+ * The parts of a path that are not just a road's footpath drawn a second time. Many roadside
+ * footpaths are mapped as paths of their own with nothing to say so; the road generator already lays
+ * one there. Where the path leaves the roadside, it starts from the road.
+ */
+function awayFromRoads(run: Pt[], roadside: (p: Pt, dx: number, dy: number) => Pt | undefined): Pt[][] {
+  // The path at steps of two metres or less, each with the road it is beside, if any.
+  const pts: Pt[] = [];
+  const road: (Pt | undefined)[] = [];
+  for (let i = 0; i < run.length; i++) {
+    const [a, b] = [run[Math.max(0, i - 1)], run[i]];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const n = Math.max(1, Math.ceil(len / 2));
+    for (let k = i ? 1 : n; k <= n; k++) {
+      const q: Pt = [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n];
+      pts.push(q);
+      road.push(len > 0.01 ? roadside(q, (b[0] - a[0]) / len, (b[1] - a[1]) / len) : undefined);
+    }
+  }
+  if (pts.length > 1) road[0] = road[1] && roadside(pts[0], (pts[1][0] - pts[0][0]) / (Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) || 1), (pts[1][1] - pts[0][1]) / (Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) || 1));
+  // Only a long enough stretch beside a road is its footpath: a path that meets a road, or cuts a corner, is not.
+  const drop = pts.map(() => false);
+  for (let i = 0; i < pts.length; i++) {
+    if (!road[i]) continue;
+    let j = i;
+    let len = 0;
+    while (j + 1 < pts.length && road[j + 1]) {
+      len += Math.hypot(pts[j + 1][0] - pts[j][0], pts[j + 1][1] - pts[j][1]);
+      j++;
+    }
+    if (len >= ROADSIDE_RUN) for (let k = i; k <= j; k++) drop[k] = true;
+    i = j;
+  }
+  if (!drop.includes(true)) return [run];
+  const out: Pt[][] = [];
+  let piece: Pt[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    if (drop[i]) {
+      if (piece.length) out.push([...piece, pts[i], road[i]!]);
+      piece = [];
+    } else {
+      if (!piece.length && i > 0) piece.push(road[i - 1]!, pts[i - 1]);
+      piece.push(pts[i]);
+    }
+  }
+  if (piece.length > 1) out.push(piece);
+  return out;
+}
+
+export function interpretPaths(data: OsmData, bounds: Rect, roads: Road[] = []): { paths: Path[]; report: Record<string, number> } {
   const report: Record<string, number> = {};
   const paths: Path[] = [];
+  const roadside = roadsideTest(roads);
   for (const w of data.ways.values()) {
     const t = w.tags;
     const hw = t.highway;
@@ -173,8 +270,9 @@ export function interpretPaths(data: OsmData, bounds: Rect): { paths: Path[]; re
     let run: Pt[] = [];
     let part = 0;
     const flush = () => {
-      if (run.length > 1) paths.push({ id: `w${w.id}${part ? '.' + part : ''}`, kind, pts: roundRing(simplify(run, 0.2)), level });
-      if (run.length > 1) part++;
+      const pieces = run.length > 1 ? (level === 0 && kind !== 'steps' ? awayFromRoads(run, roadside) : [run]) : [];
+      if (run.length > 1 && (pieces.length !== 1 || pieces[0] !== run)) report['paths.roadsideStretchesDropped'] = (report['paths.roadsideStretchesDropped'] ?? 0) + 1;
+      for (const piece of pieces) paths.push({ id: `w${w.id}${part ? '.' + part : ''}`, kind, pts: roundRing(simplify(piece, 0.2)), level }), part++;
       run = [];
     };
     for (const id of w.nodes) {

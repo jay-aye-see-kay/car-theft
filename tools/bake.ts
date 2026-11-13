@@ -70,7 +70,7 @@ const raster = (grid: Float32Array) => (x: number, y: number): number => {
 };
 const decks = measureDecks(roads.roads, raster(dsm), raster(dem));
 const buildings = interpretBuildings(osm, bounds, measure, roads.roads);
-const paths = interpretPaths(osm, bounds);
+const paths = interpretPaths(osm, bounds, roads.roads);
 const zoning = existsSync(`${dir}/zoning.json`)
   ? interpretZones(JSON.parse(await readFile(`${dir}/zoning.json`, 'utf8')), t.e, t.n, bounds)
   : { zones: [], report: { 'zones.count': 0 } };

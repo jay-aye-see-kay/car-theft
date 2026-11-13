@@ -22,6 +22,9 @@ export const ROAD_COLOURS = {
   barrier: hex(0xc9c7c0),
 };
 
+/** How far the end of a road's surface is tucked under the intersection or road it meets. */
+const TUCK = 0.3;
+
 const STATUS_TINT: Record<JunctionStatus, RGB> = { ok: hex(0x3d8f5f), squeezed: hex(0xd9862b), merge: hex(0xb04bd1) };
 
 /** Collects triangles with per-vertex colour. Tile coordinates in, Three.js coordinates out (y up, z south). */
@@ -106,11 +109,23 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
     const elevated = (i: number) => sts[i].level > 0 && sts[i + 1].level > 0;
     const onGround = (i: number) => !elevated(i) && sts[i].level >= 0 && sts[i + 1].level >= 0;
 
+    const colour = t.cls === 'motorway' || t.cls === 'ramp' ? C.motorway : C.asphalt;
     b.ribbon(
       sts.map((st, i) => offset(st, half[i])),
       sts.map((st, i) => offset(st, -half[i])),
-      t.cls === 'motorway' || t.cls === 'ramp' ? C.motorway : C.asphalt,
+      colour,
     );
+
+    // Each end is tucked a little way under whatever it meets. The two surfaces share an edge but not
+    // its points, and without the overlap the odd pixel along the join shows through as a row of dots.
+    for (const [i, out] of [[0, -1], [sts.length - 1, 1]] as const) {
+      const st = sts[i];
+      const under = (l: number): P3 => ({ x: st.x + st.nx * l + st.ny * out * TUCK, y: st.y + st.ny * l - st.nx * out * TUCK, h: st.h - 0.03 });
+      const at = [offset(st, half[i]), under(half[i])];
+      const to = [offset(st, -half[i]), under(-half[i])];
+      if (out < 0) [at.reverse(), to.reverse()];
+      b.ribbon(at, to, colour);
+    }
 
     for (const side of [1, -1]) {
       const edge = sts.map((st, i) => offset(st, side * half[i]));
