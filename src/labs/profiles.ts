@@ -38,6 +38,8 @@ const world = new World(stage, model, ground, makeCtx(), {
   hillScale: 1, trees: true, furniture: true, detail: true, detailRadius: 260, palette: 'toy',
   map: map === 'profiles' || map === 'zoning' ? map : 'generated',
 });
+// ?buildings=0 hides the buildings, to look at the roads under them.
+world.built.visible = query.get('buildings') !== '0';
 const drive = createDrive(stage, model, () => world.surface, () => renderHud());
 const reports = createReports(stage, {
   lab: 'profiles',

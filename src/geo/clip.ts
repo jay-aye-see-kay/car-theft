@@ -73,6 +73,35 @@ export class Region {
     return from.offset(d, round).offset(-d, round);
   }
 
+  /**
+   * With needles shaved off: wherever an outline runs out and straight back within `d` metres of
+   * itself, the way two edges that coincide but are sampled at different points leave it after a cut.
+   * Straight runs lose their in-between points too. Rings left with no area go.
+   */
+  shave(d: number): Region {
+    const tol = d * SCALE;
+    const out: Path[] = [];
+    for (const path of this.paths) {
+      const ring = [...path];
+      for (let changed = true; changed && ring.length >= 3; ) {
+        changed = false;
+        for (let i = 0; i < ring.length && ring.length >= 3; i++) {
+          const [a, b, c] = [ring[(i + ring.length - 1) % ring.length], ring[i], ring[(i + 1) % ring.length]];
+          const [ux, uy, vx, vy] = [b.X - a.X, b.Y - a.Y, c.X - b.X, c.Y - b.Y];
+          const long = Math.max(Math.hypot(ux, uy), Math.hypot(vx, vy));
+          // Twice the triangle's area over its longer leg: how far the third point is off the line of that leg.
+          if (Math.abs(ux * vy - uy * vx) <= tol * long) {
+            ring.splice(i, 1);
+            changed = true;
+            i--;
+          }
+        }
+      }
+      if (ring.length >= 3 && Math.abs(C.Clipper.Area(ring)) > tol * tol) out.push(ring);
+    }
+    return new Region(out);
+  }
+
   /** True if the point is covered. */
   contains(x: number, y: number): boolean {
     const pt = { X: Math.round(x * SCALE), Y: Math.round(y * SCALE) };

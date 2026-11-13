@@ -325,8 +325,15 @@ function solveCuts(arms: Arm[], node: Junction, p: RoadParams): Body {
 
 /** The junction's roadway: its body with each arm's own carriageway taken away past its cut. */
 function outline(body: Body, arms: Arm[], mouths: Mouth[]): Pick<JunctionShape, 'pieces' | 'islands' | 'fillets'> {
+  // Past its cut each arm is taken away with a margin, which clears the thin tail a kerb curve leaves
+  // as it runs into the arm's kerb. Anything wider beside an arm, such as the wedge between two roads
+  // that part, is kept right up to the arm's edge, so no crack is left for the ground to show through.
+  const exact = Region.of(arms.map((a, i) => strip(a, a.cut, body.reach[i] + 1)));
   const cutaway = Region.of(arms.map((a, i) => strip(a, a.cut, body.reach[i] + 1, 0.3)));
-  let roadway = body.whole.minus(cutaway);
+  const left = body.whole.minus(exact);
+  const margin = cutaway.minus(exact);
+  // Where the two outlines coincide but are sampled at different points, hairline needles are shaved off.
+  let roadway = left.minus(margin).union(left.within(margin).within(left.open(0.15))).shave(0.05);
   // A hole is a median's nose only where it meets one; anywhere else it is a gap the arms left in the
   // middle of the junction, and is driven over.
   const noses = Region.of(body.islands).offset(0.5);
