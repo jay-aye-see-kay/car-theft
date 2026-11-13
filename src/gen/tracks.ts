@@ -62,6 +62,8 @@ export interface Track {
   oneWay: boolean;
   level: Int8Array;
   h: Float32Array;
+  /** Surface height measured on a structure, NaN elsewhere. See `Road.deck`. */
+  measured: Float32Array;
   /** Set by the junction solver: the track is only built between these distances. */
   cutA: number;
   cutB: number;
@@ -162,6 +164,7 @@ export function buildTrack(road: Road, p: RoadParams): Track {
     oneWay: road.sections.every((sec) => sec.lanesB === 0),
     level: new Int8Array(n),
     h: new Float32Array(n),
+    measured: new Float32Array(0),
     cutA: 0,
     cutB: 0,
     thruA: false,
@@ -213,6 +216,17 @@ export function buildTrack(road: Road, p: RoadParams): Track {
     const sec = road.sections.find((x) => s <= x.s1 * k) ?? road.sections[road.sections.length - 1];
     t.level[i] = sec.level;
   }
+  // Measured deck: its height, and the road counts as on a structure for as far as it was measured.
+  t.measured = new Float32Array(n).fill(NaN);
+  const deck = road.deck ?? [];
+  for (let i = 0, d = 0; i < n && deck.length > 1; i++) {
+    const s = t.s[i] / k;
+    while (d < deck.length - 2 && deck[d + 1][0] < s) d++;
+    const [a, b] = [deck[d], deck[d + 1]];
+    if (s < a[0] - 1.5 || s > b[0] + 1.5 || b[0] - a[0] > 10 || t.level[i] < 0) continue;
+    t.measured[i] = a[1] + (b[1] - a[1]) * Math.min(1, Math.max(0, (s - a[0]) / (b[0] - a[0] || 1)));
+    t.level[i] = Math.max(1, t.level[i]);
+  }
   return t;
 }
 
@@ -236,7 +250,8 @@ export function solveElevations(model: TileModel, tracks: Map<string, Track>, gr
   for (const j of model.junctions) {
     const onGround = j.arms.filter((a) => {
       const t = tracks.get(a.road)!;
-      return t.level[a.end === 'a' ? 0 : t.n - 1] === 0;
+      const i = a.end === 'a' ? 0 : t.n - 1;
+      return t.level[i] === 0 || !Number.isNaN(t.measured[i]);
     });
     if (onGround.length) {
       // Sample at the arm ends rather than the junction centre, which may sit on a median or a bank.
@@ -244,7 +259,7 @@ export function solveElevations(model: TileModel, tracks: Map<string, Track>, gr
       for (const a of onGround) {
         const t = tracks.get(a.road)!;
         const i = a.end === 'a' ? 0 : t.n - 1;
-        sum += ground.at(t.x[i], t.y[i]);
+        sum += Number.isNaN(t.measured[i]) ? ground.at(t.x[i], t.y[i]) : t.measured[i];
       }
       jh.set(j.id, sum / onGround.length);
     } else {
@@ -254,7 +269,9 @@ export function solveElevations(model: TileModel, tracks: Map<string, Track>, gr
   }
 
   const all = [...tracks.values()];
-  for (const t of all) for (let i = 0; i < t.n; i++) t.h[i] = ground.at(t.x[i], t.y[i]);
+  for (const t of all) for (let i = 0; i < t.n; i++) t.h[i] = Number.isNaN(t.measured[i]) ? ground.at(t.x[i], t.y[i]) : t.measured[i];
+  // A sample whose height is known: on the ground, or on a deck that was measured.
+  const known = (t: Track, i: number): boolean => t.level[i] === 0 || !Number.isNaN(t.measured[i]);
 
   // Elevated or buried runs: straight lines between the nearest grounded points. A junction
   // that sits on a structure takes the distance-weighted mean of what its arms connect to.
@@ -264,12 +281,12 @@ export function solveElevations(model: TileModel, tracks: Map<string, Track>, gr
       t.h[t.n - 1] = jh.get(t.road.b)!;
       let i = 0;
       while (i < t.n) {
-        if (t.level[i] === 0) {
+        if (known(t, i)) {
           i++;
           continue;
         }
         let j = i;
-        while (j < t.n && t.level[j] !== 0) j++;
+        while (j < t.n && !known(t, j)) j++;
         const lo = Math.max(0, i - 1);
         const hi = Math.min(t.n - 1, j);
         for (let k = lo + 1; k < hi; k++) t.h[k] = t.h[lo] + ((t.h[hi] - t.h[lo]) * (t.s[k] - t.s[lo])) / (t.s[hi] - t.s[lo] || 1);
@@ -290,7 +307,7 @@ export function solveElevations(model: TileModel, tracks: Map<string, Track>, gr
         const dir = a.end === 'a' ? 1 : -1;
         const start = t.s[i];
         do i += dir;
-        while (i > 0 && i < t.n - 1 && t.level[i] !== 0);
+        while (i > 0 && i < t.n - 1 && !known(t, i));
         const w = 1 / Math.max(1, Math.abs(t.s[i] - start));
         sum += t.h[i] * w;
         weight += w;

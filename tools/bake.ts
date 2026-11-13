@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { interpretAreas, interpretBuildings, interpretLandmarks, interpretPaths, interpretStreams, interpretZones, type Measured } from '../src/interpret/features.ts';
 import { parseOsm } from '../src/interpret/osm.ts';
 import { interpretRoads } from '../src/interpret/roads.ts';
+import { measureDecks } from '../src/interpret/decks.ts';
 import type { Pt, TileModel } from '../src/model/types.ts';
 import { findTile } from './tiles.ts';
 
@@ -62,6 +63,12 @@ const osm = parseOsm(JSON.parse(await readFile(`${dir}/osm.json`, 'utf8')), t.e,
 const bounds = { x0: -t.sizeX / 2, y0: -t.sizeY / 2, x1: t.sizeX / 2, y1: t.sizeY / 2 };
 
 const roads = interpretRoads(osm, bounds, { clusterDist: 20 });
+const raster = (grid: Float32Array) => (x: number, y: number): number => {
+  const inside = Math.abs(x) <= t.sizeX / 2 && Math.abs(y) <= t.sizeY / 2;
+  const v = inside ? grid[px(x, y)] : NODATA;
+  return v === NODATA ? NaN : v;
+};
+const decks = measureDecks(roads.roads, raster(dsm), raster(dem));
 const buildings = interpretBuildings(osm, bounds, measure, roads.roads);
 const paths = interpretPaths(osm, bounds);
 const zoning = existsSync(`${dir}/zoning.json`)
@@ -106,7 +113,7 @@ const model: TileModel = {
   landmarks: interpretLandmarks(osm, bounds),
   zones: zoning.zones,
   sea,
-  report: { ...roads.report, ...buildings.report, ...paths.report, ...zoning.report },
+  report: { ...roads.report, ...decks, ...buildings.report, ...paths.report, ...zoning.report },
 };
 
 const outDir = `public/tiles/${t.id}`;

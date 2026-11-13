@@ -58,20 +58,20 @@ export interface CoverMeshes {
 /** Top of a shop verandah above the footpath, and of a bus or park shelter. */
 const VERANDAH = 3.6;
 const SHELTER = 2.7;
-/** A cover at least this deep, front to back, is more than a verandah. */
-const PORTICO_DEPTH = 8;
+/** A cover at least this wide on average is more than a verandah. */
+const PORTICO_WIDTH = 5.5;
 const PORTICO_MAX = 12;
 
-/** The ring's extent across its longest edge. */
-function depthOf(ring: Pt[]): number {
-  let [len, ux, uy] = [0, 1, 0];
-  ring.forEach((p, i) => {
-    const q = ring[(i + 1) % ring.length];
-    const l = dist(p, q);
-    if (l > len) [len, ux, uy] = [l, (q[0] - p[0]) / l, (q[1] - p[1]) / l];
-  });
-  const across = ring.map(([x, y]) => -x * uy + y * ux);
-  return Math.max(...across) - Math.min(...across);
+/** The ring's average width: exact for a long strip, however it bends around a corner. */
+function meanWidth(ring: Pt[]): number {
+  let perimeter = 0;
+  ring.forEach((p, i) => (perimeter += dist(p, ring[(i + 1) % ring.length])));
+  return (2 * Math.abs(ringArea(ring))) / (perimeter || 1);
+}
+
+/** A narrow roof hard against a building: hung from the wall over the footpath, with no posts. */
+function isVerandah(b: Building, walled: Building[]): boolean {
+  return b.kind !== 'shelter' && meanWidth(b.ring) < PORTICO_WIDTH && attached(b, walled);
 }
 
 const boxes = new WeakMap<Building, [number, number, number, number]>();
@@ -114,9 +114,9 @@ function attached(cover: Building, walled: Building[]): boolean {
  */
 export function coverHeight(b: Building, walled: Building[]): number {
   if (b.kind === 'shelter') return SHELTER;
-  // A deep roof is a portico or a forecourt canopy, and big enough for its own height to have been
-  // measured. A shallow one hard against a building is a verandah over the footpath.
-  if (depthOf(b.ring) >= PORTICO_DEPTH) return Math.min(Math.max(VERANDAH, b.h), PORTICO_MAX);
+  if (isVerandah(b, walled)) return VERANDAH;
+  // A wide roof is a portico or a forecourt canopy, and big enough for its own height to have been measured.
+  if (meanWidth(b.ring) >= PORTICO_WIDTH) return Math.min(Math.max(VERANDAH, b.h), PORTICO_MAX);
   if (attached(b, walled)) return VERANDAH;
   // Free-standing: a small one is a shelter or carport, a big one a forecourt canopy.
   return Math.abs(ringArea(b.ring)) < 40 ? Math.min(b.h, 3.2) : Math.min(b.h, 6.5);
@@ -150,16 +150,22 @@ export function buildCovers(buildings: Building[], ground: Heightfield, tracks: 
     const ring = b.ring;
     const c = centroid(ring);
     const base = Math.max(...ring.map((p) => ground.at(p[0], p[1])));
-    const top = base + Math.max(2.6, coverHeight(b, walled));
+    const height = Math.max(2.6, coverHeight(b, walled));
+    const hung = isVerandah(b, walled);
+    // A verandah follows the footpath down a sloping street; anything on posts is level.
+    const tops = ring.map((p) => (hung ? ground.at(p[0], p[1]) : base) + height);
+    const top = base + height;
     const under = top - 0.3;
     const faces = THREE.ShapeUtils.triangulateShape(ring.map((p) => new THREE.Vector2(p[0], p[1])), []);
     for (const [i, j, k] of faces) {
-      frame.tri([...ring[i], top], [...ring[j], top], [...ring[k], top], COLOURS.roof);
-      frame.tri([...ring[i], under], [...ring[k], under], [...ring[j], under], COLOURS.fascia);
+      frame.tri([...ring[i], tops[i]], [...ring[j], tops[j]], [...ring[k], tops[k]], COLOURS.roof);
+      frame.tri([...ring[i], tops[i] - 0.3], [...ring[k], tops[k] - 0.3], [...ring[j], tops[j] - 0.3], COLOURS.fascia);
     }
     ring.forEach((p, i) => {
       const q = ring[(i + 1) % ring.length];
-      frame.quad([...p, under], [...q, under], [...q, top], [...p, top], COLOURS.fascia);
+      const [tp, tq] = [tops[i], tops[(i + 1) % ring.length]];
+      frame.quad([...p, tp - 0.3], [...q, tq - 0.3], [...q, tq], [...p, tp], COLOURS.fascia);
+      if (hung) return;
       // A post at each corner and along long edges, set in a little from the roof's edge.
       const len = dist(p, q);
       // Taller roofs stand on fewer, heavier posts.

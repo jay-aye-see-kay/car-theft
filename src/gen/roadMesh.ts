@@ -197,7 +197,9 @@ export function buildRoadMeshes(
   }
 
   for (const j of junctions) {
-    b.polygon(j.ring, opts.tintJunctions ? STATUS_TINT[j.status] : C.junction);
+    // Between motorway carriageways the join is motorway too, so a merge shows no patch.
+    const fast = j.mouths.length > 0 && j.mouths.every((m) => m.track.cls === 'motorway' || m.track.cls === 'ramp');
+    b.polygon(j.ring, opts.tintJunctions ? STATUS_TINT[j.status] : fast ? C.motorway : C.junction);
     if (j.deck) b.polygon(j.ring.map((pt) => ({ ...pt, h: pt.h - DECK_DEPTH })), C.structure);
     for (const f of j.fillets) {
       if (f.deck && !f.footpath && f.pts.length >= 2) {

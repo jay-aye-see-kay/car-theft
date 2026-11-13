@@ -27,6 +27,13 @@ export interface Road {
   pts: Pt[];
   sections: RoadSection[];
   footpath: boolean;
+  /**
+   * Where the road is carried on a structure and its surface could be measured: [distance along,
+   * height] pairs, a few metres apart. It can reach past the sections with a level above 0, because
+   * a structure is often longer than the span the map calls a bridge. Runs are separated by a gap in
+   * distance of more than 10 m.
+   */
+  deck?: [number, number][];
 }
 
 export interface Junction {
