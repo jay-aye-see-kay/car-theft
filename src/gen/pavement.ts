@@ -42,6 +42,10 @@ export interface Pavement {
 /** The narrowest strip of ground left open between two footpaths. */
 const VERGE = 2.5;
 
+/** An island smaller than this, in square metres, is not worth a kerb. */
+const SCRAP = 12;
+/** How far a sealed patch is tucked under the roads beside it. */
+const TUCK = 0.25;
 /** Paving narrower than twice this is laid flush. */
 const FLUSH = 0.45;
 /** Longest boundary edge, so the paving follows the road's profile down a hill. */
@@ -124,6 +128,8 @@ class RingIndex {
     return (this.cells.get(Math.floor(x / C) * 65536 + Math.floor(y / C)) ?? []).some((r) => pointInRing(x, y, r));
   }
 }
+
+const ringArea = (r: XY[]): number => Math.abs(r.reduce((sum, q, i) => sum + q.x * r[(i + 1) % r.length].y - r[(i + 1) % r.length].x * q.y, 0) / 2);
 
 /** Splits `0..n-1` into runs where `keep` holds, none longer than `max`. */
 function runs(n: number, keep: (i: number) => boolean, max: number): [number, number][] {
@@ -308,7 +314,13 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
     const raw = Region.of([...walkHere, ...medians.flatMap((sh) => [sh.outer])])
       .close(VERGE / 2, false, true)
       .minus(roadway);
-    const paved = raw.open(FLUSH);
+    // A scrap of paving with road all round it, left between an intersection and a road passing close by,
+    // is too small to stand as an island: it is sealed over with the slivers.
+    const scraps = raw
+      .open(FLUSH)
+      .shapes(0.05)
+      .filter((sh) => ringArea(sh.outer) < SCRAP && Region.of([sh.outer]).offset(0.4, false).minus(roadway).minus(raw).shapes(0.2).length === 0);
+    const paved = scraps.length ? raw.open(FLUSH).minus(Region.of(scraps.map((sh) => sh.outer))) : raw.open(FLUSH);
     // Wider strips between carriageways at different heights: an even bank from one road's edge to the
     // other's, laid as a surface of its own because the ground's grid is too coarse to shape one.
     const slopes = gaps
@@ -327,7 +339,9 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
       ],
     ]);
     for (const s of paved.within(square).shapes(0.05)) pavedShapes.push({ s, cell });
-    for (const s of raw.minus(paved).within(square).shapes(0.05)) sealedShapes.push({ s, cell });
+    // Sealed patches reach a little way under the roads around them, so no join shows.
+    const flush = Region.of(raw.minus(paved).shapes(0.05).map((sh) => sh.outer));
+    for (const s of flush.offset(TUCK, false).minus(paved).within(square).shapes(0.05)) sealedShapes.push({ s, cell });
     for (const s of bank.within(square).shapes(1)) bankShapes.push({ s, cell });
     const drives = Region.of(road.filter((_, i) => isDrive[i] && hits(roadBoxes[i])));
     if (!drives.empty && walkHere.length) {
