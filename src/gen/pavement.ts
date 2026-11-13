@@ -39,6 +39,9 @@ export interface Pavement {
   surfaceAt(x: number, y: number): number;
 }
 
+/** The narrowest strip of ground left open between two footpaths. */
+const VERGE = 2.5;
+
 /** Paving narrower than twice this is laid flush. */
 const FLUSH = 0.45;
 /** Longest boundary edge, so the paving follows the road's profile down a hill. */
@@ -295,14 +298,15 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
     };
     // Growing the whole roadway is the dear step, so it is done once, at the wider reach, and the
     // narrower gaps are picked out of that answer.
-    const gaps = roadway.close(BANK_GAP, false).minus(roadway);
+    const gaps = roadway.close(BANK_GAP, false, true).minus(roadway);
     const medians = gaps
       .minus(gaps.open(GAP))
       .open(0.6)
       .shapes(4)
       .filter((sh) => level(sh));
+    // Ground left between two footpaths that is too narrow to be a verge is paved over with them.
     const raw = Region.of([...walkHere, ...medians.flatMap((sh) => [sh.outer])])
-      .union()
+      .close(VERGE / 2, false, true)
       .minus(roadway);
     const paved = raw.open(FLUSH);
     // Wider strips between carriageways at different heights: an even bank from one road's edge to the

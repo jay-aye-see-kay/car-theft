@@ -63,9 +63,14 @@ export class Region {
     return Region.run(C.ClipType.ctIntersection, this.paths, other.paths);
   }
 
-  /** Grown then shrunk back: every gap narrower than twice `d` is filled, and inside corners take that radius. */
-  close(d: number, round = true): Region {
-    return new Region(C.Clipper.CleanPolygons(this.paths, 0.03 * SCALE)).offset(d, round).offset(-d, round);
+  /**
+   * Grown then shrunk back: every gap narrower than twice `d` is filled, and inside corners take that
+   * radius if `round`. With `simplify` the outline is first thinned to 3 cm, which makes this several
+   * times quicker: for finding gaps, not for an edge that must still meet its neighbours exactly.
+   */
+  close(d: number, round = true, simplify = false): Region {
+    const from = simplify ? new Region(C.Clipper.CleanPolygons(this.paths, 0.03 * SCALE)) : this;
+    return from.offset(d, round).offset(-d, round);
   }
 
   /** True if the point is covered. */

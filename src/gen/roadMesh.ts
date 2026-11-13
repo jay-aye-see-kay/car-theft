@@ -29,6 +29,8 @@ class Builder {
   private pos: number[] = [];
   private col: number[] = [];
   private idx: number[] = [];
+  /** Vertices lit as if level, whatever their triangles' tilt. */
+  private level: number[] = [];
 
   vertex(p: P3, c: RGB): number {
     this.pos.push(p.x, p.h, -p.y);
@@ -50,9 +52,16 @@ class Builder {
     }
   }
 
-  polygon(ring: P3[], c: RGB, holes: P3[][] = []): void {
+  /**
+   * A polygon with holes. `level` lights it as flat ground: paving is cut into long thin triangles
+   * between edges at slightly different heights, and lit by their own tilt they show as streaks.
+   */
+  polygon(ring: P3[], c: RGB, holes: P3[][] = [], level = false): void {
     const base = this.pos.length / 3;
-    for (const p of [ring, ...holes].flat()) this.vertex(p, c);
+    for (const p of [ring, ...holes].flat()) {
+      const v = this.vertex(p, c);
+      if (level) this.level.push(v);
+    }
     const v2 = (r: P3[]) => r.map((p) => new THREE.Vector2(p.x, p.y));
     const faces = THREE.ShapeUtils.triangulateShape(v2(ring), holes.map(v2));
     for (const f of faces) this.idx.push(base + f[0], base + f[1], base + f[2]);
@@ -64,6 +73,8 @@ class Builder {
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setIndex(this.idx);
     g.computeVertexNormals();
+    const normal = g.getAttribute('normal');
+    for (const v of this.level) normal.setXYZ(v, 0, 1, 0);
     return g;
   }
 }
@@ -183,10 +194,10 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
 
   for (const piece of net.pavement.paved) pave(b, piece, kh);
   for (const piece of net.pavement.sealed) b.polygon(piece.outer.pts, C.asphalt, piece.holes.map((h) => h.pts));
-  for (const piece of net.pavement.banks) b.polygon(piece.outer.pts, C.bank, piece.holes.map((h) => h.pts));
+  for (const piece of net.pavement.banks) b.polygon(piece.outer.pts, C.bank, piece.holes.map((h) => h.pts), true);
   // Just proud of the driveway it lies across, so the two surfaces never fight.
   const proud = (r: P3[]) => r.map((q) => ({ ...q, h: q.h + 0.03 }));
-  for (const piece of net.pavement.crossings) b.polygon(proud(piece.outer.pts), C.footpath, piece.holes.map((h) => proud(h.pts)));
+  for (const piece of net.pavement.crossings) b.polygon(proud(piece.outer.pts), C.footpath, piece.holes.map((h) => proud(h.pts)), true);
 
   return { surface: b.build(), markings: m.build() };
 }
@@ -195,7 +206,7 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
 function pave(b: Builder, piece: PavePiece, kh: number): void {
   const C = ROAD_COLOURS;
   const up = (r: P3[]) => r.map((q) => ({ ...q, h: q.h + kh }));
-  b.polygon(up(piece.outer.pts), C.footpath, piece.holes.map((h) => up(h.pts)));
+  b.polygon(up(piece.outer.pts), C.footpath, piece.holes.map((h) => up(h.pts)), true);
   for (const ring of [piece.outer, ...piece.holes]) {
     const n = ring.pts.length;
     const at = (k: number) => ring.pts[(k + n) % n];
