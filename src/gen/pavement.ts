@@ -228,7 +228,14 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
       road.push(piece.outer);
       isJunction[road.length - 1] = true;
       isDrive[road.length - 1] = crossed;
-      for (const q of piece.outer) heights.add(q);
+      // All along each edge, not just at its corners: paving that meets a long straight edge must take
+      // its height from that edge, not from a road some way off.
+      for (const ring of [piece.outer, ...piece.holes])
+        ring.forEach((a, k) => {
+          const b = ring[(k + 1) % ring.length];
+          const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 1.5);
+          for (let i = 0; i < n; i++) heights.add({ x: a.x + ((b.x - a.x) * i) / n, y: a.y + ((b.y - a.y) * i) / n, h: a.h + ((b.h - a.h) * i) / n });
+        });
     }
     // Islands are paved, and roadway around them is not laid over them.
     islands.push(...j.islands);
