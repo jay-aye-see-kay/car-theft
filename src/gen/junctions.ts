@@ -154,8 +154,8 @@ function linkRegion(j: Junction, p: RoadParams): Region {
   for (const l of j.links ?? []) {
     const hw = (Math.max(1, l.lanes) * p.laneWidth[l.cls]) / 2 + p.shoulder[l.cls];
     l.pts.forEach(([x, y], i) => {
-      if (i > 0 && i < l.pts.length - 1) {
-        // A disc at each bend, so the outside of the corner is covered.
+      {
+        // A disc at each bend, so the outside of the corner is covered, and at each end, where other roads butt on.
         const disc: XY[] = [];
         for (let k = 0; k < 12; k++) disc.push({ x: x + Math.cos((k * Math.PI) / 6) * hw, y: y + Math.sin((k * Math.PI) / 6) * hw });
         rings.push(disc);
@@ -443,7 +443,7 @@ export function solveJunctions(plans: Map<string, JunctionPlan>, p: RoadParams):
       if (!a.minor) continue;
       const t = a.t;
       const limit = Math.min(p.maxCut, t.length * 0.45);
-      let cut = Math.min(2, limit);
+      let cut = 0;
       for (; cut < limit; cut += 0.5) {
         const c = sampleAt(t, a.end === 'a' ? cut : t.length - cut);
         const clear = arms.every((arm) => {
@@ -555,6 +555,25 @@ export function solveJunctions(plans: Map<string, JunctionPlan>, p: RoadParams):
     // anything it adds is the wedge between mouths that were already touching.
     let pieces: Piece[] = [{ outer: ring, holes: [] }];
     if (!isSimple(ring)) pieces = [{ outer: hull(ring), holes: [] }];
+    // Short roads folded into this node when the map's nodes were merged: a driveway that reached the
+    // street through one still needs its surface, from the back of the street's footpath to where it led.
+    const links = linkRegion(j, p);
+    if (!links.empty) {
+      const beside = (a: Arm): number => (a.t.road.footpath ? p.footpathWidth + 0.2 : 0.2);
+      // The street and its footpath, round the outside of any bend between its two stretches too.
+      const street = Region.of(arms.map((a) => strip(a, -2, Math.min(a.t.length, 40), beside(a))))
+        .union()
+        .union(Region.of([pieces[0].outer]).offset(Math.max(...arms.map(beside))));
+      const known: P3[] = [...ring];
+      for (const a of plan.arms) {
+        if (!a.minor) continue;
+        const c = sampleAt(a.t, a.end === 'a' ? a.t.cutA : a.t.length - a.t.cutB);
+        known.push({ x: c.x, y: c.y, h: c.h });
+      }
+      const height = heightsFrom(known);
+      const lift = (q: XY): P3 => ({ x: q.x, y: q.y, h: height(q.x, q.y) });
+      for (const sh of links.minus(street).open(0.3).shapes(2)) pieces.push({ outer: sh.outer.map(lift), holes: sh.holes.map((r) => r.map(lift)) });
+    }
 
     shapes.push({
       id: j.id,

@@ -115,6 +115,9 @@ const AROUND: [number, number][] = [
 /** How far past a carriageway's edge the ground stays level with it. */
 const SHELF = 2.5;
 
+/** How far outside an intersection's edge the ground is brought to its level. */
+const VERGE = 3;
+
 const smoothstep = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 /**
@@ -209,11 +212,11 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
       }
       return undefined;
     };
-    for (let r = Math.max(0, Math.ceil((minY - y0) / cell)); r <= Math.min(rows - 1, Math.floor((maxY - y0) / cell)); r++) {
-      for (let c = Math.max(0, Math.ceil((minX - x0) / cell)); c <= Math.min(cols - 1, Math.floor((maxX - x0) / cell)); c++) {
+    for (let r = Math.max(0, Math.ceil((minY - VERGE - y0) / cell)); r <= Math.min(rows - 1, Math.floor((maxY + VERGE - y0) / cell)); r++) {
+      for (let c = Math.max(0, Math.ceil((minX - VERGE - x0) / cell)); c <= Math.min(cols - 1, Math.floor((maxX + VERGE - x0) / cell)); c++) {
         const px = x0 + c * cell;
         const py = y0 + r * cell;
-        if (!pointInRing(px, py, ring)) continue;
+        const within = pointInRing(px, py, ring);
         let sum = 0;
         let wsum = 0;
         let inside = Infinity;
@@ -227,6 +230,13 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
           inside = Math.min(inside, Math.hypot(px - (q.x + (b.x - q.x) * u), py - (q.y + (b.y - q.y) * u)));
         });
         const k = r * cols + c;
+        if (!within) {
+          // Just outside, where no road or footpath borders it: the ground comes level with the edge, as
+          // it does beside a road, so a slope cannot stand over the surface there.
+          const w = 1 - smoothstep((inside - VERGE / 2) / (VERGE / 2));
+          if (w > weight[k] && !j.deck) [weight[k], target[k]] = [w, sum / wsum - SINK];
+          continue;
+        }
         const h = (onFace(px, py) ?? sum / wsum) - SINK;
         if (weight[k] > 0 && target[k] < h - 1.5) {
           // Another road's bed runs underneath: this part of the junction is on a structure.

@@ -184,6 +184,9 @@ export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptio
   for (const piece of net.pavement.paved) pave(b, piece, kh);
   for (const piece of net.pavement.sealed) b.polygon(piece.outer.pts, C.asphalt, piece.holes.map((h) => h.pts));
   for (const piece of net.pavement.banks) b.polygon(piece.outer.pts, C.bank, piece.holes.map((h) => h.pts));
+  // Just proud of the driveway it lies across, so the two surfaces never fight.
+  const proud = (r: P3[]) => r.map((q) => ({ ...q, h: q.h + 0.03 }));
+  for (const piece of net.pavement.crossings) b.polygon(proud(piece.outer.pts), C.footpath, piece.holes.map((h) => proud(h.pts)));
 
   return { surface: b.build(), markings: m.build() };
 }

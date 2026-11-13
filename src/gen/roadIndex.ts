@@ -101,8 +101,9 @@ export function measureSides(tracks: Iterable<Track>, p: RoadParams): void {
         // the shared pavement cuts that gap itself.
         if (along < 0.5) continue;
         const theirs = halfWidth(o.t, o.i) / along;
-        // A narrower road lying wholly within this one takes nothing from its edges.
-        if (Math.abs(lateral) + theirs <= half) continue;
+        // A road whose middle lies within this one is joined to it, not beside it: the same road carrying
+        // on round a bend, or a narrower one inside it. It takes nothing from this one's edges.
+        if (Math.abs(lateral) < half) continue;
         const gap = Math.abs(lateral) - half - theirs;
         const side = lateral > 0 ? 0 : 1;
         room[side][i] = Math.min(room[side][i], Math.max(0, gap));

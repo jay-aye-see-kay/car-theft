@@ -33,6 +33,8 @@ export interface Pavement {
   sealed: PavePiece[];
   /** Sloping ground between two carriageways at different heights, flush with each at its edge. */
   banks: PavePiece[];
+  /** Where a footpath carries on across the mouth of a driveway or lane, level with the road. */
+  crossings: PavePiece[];
   /** Height of the road surface nearest a point, which the paving sits a kerb above. */
   surfaceAt(x: number, y: number): number;
 }
@@ -140,6 +142,9 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
   const road: XY[][] = [];
   /** Which of `road` are junctions, the only roadway an island is cut from. */
   const isJunction: boolean[] = [];
+  /** Which of `road` a footpath carries on across: lanes and driveways, and the junctions where only those join a street. */
+  const isDrive: boolean[] = [];
+  const driveway = (t: Track): boolean => t.cls === 'lane' && !t.road.footpath;
   const walk: XY[][] = [];
   const islands: XY[][] = [];
   const heights = new HeightCloud();
@@ -158,6 +163,7 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
       const at = sts.slice(a, b + 2);
       const hw = half.slice(a, b + 2);
       road.push(band(at.map((st, i) => offset(st, hw[i])), at.map((st, i) => offset(st, -hw[i]))));
+      isDrive[road.length - 1] = driveway(t);
     }
     if (!t.road.footpath) continue;
     for (const side of [1, -1]) {
@@ -187,9 +193,32 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
   for (const j of junctions) {
     // A junction wholly on a structure is clear of the ground; one partly on the ground is roadway there.
     if (j.deck && j.fillets.every((f) => f.deck)) continue;
+    // Only driveways join the street here: its footpath carries straight on past them, from the end of
+    // one stretch of the street to the start of the next.
+    const street = j.mouths.filter((m) => !driveway(m.track));
+    const crossed = street.length === 2 && street.length < j.mouths.length && street.every((m) => m.track.road.footpath);
+    if (crossed) {
+      const ends = street.map((m, k) => {
+        const sts = stations(m.track);
+        const st = sts[m.end === 'a' ? 0 : sts.length - 1];
+        // Facing along the street from the first stretch to the second.
+        return { t: m.track, st, sign: (m.end === 'b') === (k === 0) ? 1 : -1 };
+      });
+      if (ends.every((e) => e.st && e.st.level === 0)) {
+        for (const side of [1, -1]) {
+          const edge = ends.map(({ t, st, sign }) => {
+            const half = carriageway(t, st);
+            const width = Math.min(p.footpathWidth, st.room[side * sign > 0 ? 0 : 1]);
+            return { inner: offset(st, side * sign * (half - 0.05)), outer: offset(st, side * sign * (half + width)), width };
+          });
+          if (edge.every((e) => e.width > 0.05)) walk.push([edge[0].inner, edge[1].inner, edge[1].outer, edge[0].outer]);
+        }
+      }
+    }
     for (const piece of j.pieces) {
       road.push(piece.outer);
       isJunction[road.length - 1] = true;
+      isDrive[road.length - 1] = crossed;
       for (const q of piece.outer) heights.add(q);
     }
     // Islands are paved, and roadway around them is not laid over them.
@@ -233,6 +262,7 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
   const pavedShapes: { s: Shape; cell: [number, number, number, number] }[] = [];
   const sealedShapes: { s: Shape; cell: [number, number, number, number] }[] = [];
   const bankShapes: { s: Shape; cell: [number, number, number, number] }[] = [];
+  const crossingShapes: { s: Shape; cell: [number, number, number, number] }[] = [];
   for (const key of cells) {
     const cx = Math.round(key / 65536);
     const cy = key - cx * 65536;
@@ -295,6 +325,15 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
     for (const s of paved.within(square).shapes(0.05)) pavedShapes.push({ s, cell });
     for (const s of raw.minus(paved).within(square).shapes(0.05)) sealedShapes.push({ s, cell });
     for (const s of bank.within(square).shapes(1)) bankShapes.push({ s, cell });
+    const drives = Region.of(road.filter((_, i) => isDrive[i] && hits(roadBoxes[i])));
+    if (!drives.empty && walkHere.length) {
+      const crossing = Region.of(walkHere)
+        .union()
+        .within(drives.union())
+        .minus(Region.of(road.filter((_, i) => !isDrive[i] && hits(roadBoxes[i]))))
+        .open(0.3);
+      for (const s of crossing.within(square).shapes(0.5)) crossingShapes.push({ s, cell });
+    }
   }
   for (const { s } of sealedShapes) edges.add(s.outer);
 
@@ -328,6 +367,7 @@ export function buildPavement(tracks: Iterable<Track>, junctions: JunctionShape[
     paved: pavedShapes.map((s) => lay(s, true)),
     sealed: sealedShapes.map((s) => lay(s, false)),
     banks: bankShapes.map((s) => lay(s, false)),
+    crossings: crossingShapes.map((s) => lay(s, false)),
     surfaceAt,
   };
 }
