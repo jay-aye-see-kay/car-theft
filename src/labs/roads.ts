@@ -66,9 +66,10 @@ function generate(): void {
   for (const child of world.children) (child as THREE.Mesh).geometry.dispose();
   world.clear();
 
-  ({ tracks, junctions: shapes } = buildNetwork(model, ground, params));
-  const graded = gradeTerrain(ground, tracks.values(), shapes, params, model.paths);
-  const roads = buildRoadMeshes(tracks.values(), shapes, params, { tintJunctions: view.tintJunctions });
+  const net = buildNetwork(model, ground, params);
+  ({ tracks, junctions: shapes } = net);
+  const graded = gradeTerrain(ground, net, params, model.paths);
+  const roads = buildRoadMeshes(net, params, { tintJunctions: view.tintJunctions });
 
   world.add(new THREE.Mesh(buildTerrainGeometry(graded), mats.terrain));
   world.add(new THREE.Mesh(roads.surface, mats.surface));

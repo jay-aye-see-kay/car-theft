@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { pointInRing } from '../geo/poly.ts';
 import type { Heightfield } from '../model/load.ts';
 import type { Area, Path, Pt, TileModel } from '../model/types.ts';
-import type { JunctionShape } from './junctions.ts';
+import type { Network } from './network.ts';
 import type { ProfileContext } from '../profile/context.ts';
 import { type RoadParams, type Track, deckDepth, halfWidth } from './tracks.ts';
 
@@ -99,7 +99,9 @@ const smoothstep = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 
  * Returns a copy of the ground where every road on the ground has a flat bed under it and
  * the surrounding terrain is blended up or down to meet it. Bridges and tunnels leave the ground alone.
  */
-export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junctions: JunctionShape[], p: RoadParams, paths: Path[] = []): Heightfield {
+export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, paths: Path[] = []): Heightfield {
+  const { junctions, pavement } = net;
+  const tracks = net.tracks.values();
   const out = ground.clone();
   const { cols, rows, cell, x0, y0 } = out;
   const weight = new Float32Array(cols * rows);
@@ -147,8 +149,8 @@ export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junct
   }
 
   // Junction interiors: flat to the junction's own surface.
-  for (const j of junctions) {
-    const ring: Pt[] = j.ring.map((q) => [q.x, q.y]);
+  for (const j of junctions) for (const piece of j.pieces) {
+    const ring: Pt[] = piece.outer.map((q) => [q.x, q.y]);
     let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
     for (const [x, y] of ring) {
       minX = Math.min(minX, x);
@@ -163,7 +165,7 @@ export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junct
         if (!pointInRing(px, py, ring)) continue;
         let sum = 0;
         let wsum = 0;
-        for (const q of j.ring) {
+        for (const q of piece.outer) {
           const w = 1 / ((q.x - px) ** 2 + (q.y - py) ** 2 + 0.01);
           sum += q.h * w;
           wsum += w;
@@ -173,12 +175,30 @@ export function gradeTerrain(ground: Heightfield, tracks: Iterable<Track>, junct
         if (weight[k] > 0 && target[k] < h - 1.5) {
           // Another road's bed runs underneath: this part of the junction is on a structure.
           ceiling[k] = Math.min(ceiling[k], h - 0.6);
-        } else if (Math.abs(h - out.data[k]) < 4 || weight[k] > 0) {
+        } else if (!j.deck || Math.abs(h - out.data[k]) < 4 || weight[k] > 0) {
           // Only where the ground is on this junction's level; a junction on a viaduct has open air under it.
           // Where a road bed is already here, the lower surface wins, as it does between two roads.
           target[k] = weight[k] >= 1 ? Math.min(target[k], h) : h;
           weight[k] = 1;
         }
+      }
+    }
+  }
+
+  // Under the pavement: never above the road it sits a kerb over.
+  for (const piece of [...pavement.paved, ...pavement.sealed]) {
+    const ring: Pt[] = piece.outer.pts.map((q) => [q.x, q.y]);
+    const holes: Pt[][] = piece.holes.map((h) => h.pts.map((q) => [q.x, q.y]));
+    let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of ring) [minX, minY, maxX, maxY] = [Math.min(minX, x), Math.min(minY, y), Math.max(maxX, x), Math.max(maxY, y)];
+    for (let r = Math.max(0, Math.ceil((minY - y0) / cell)); r <= Math.min(rows - 1, Math.floor((maxY - y0) / cell)); r++) {
+      for (let c = Math.max(0, Math.ceil((minX - x0) / cell)); c <= Math.min(cols - 1, Math.floor((maxX - x0) / cell)); c++) {
+        const [px, py] = [x0 + c * cell, y0 + r * cell];
+        if (!pointInRing(px, py, ring) || holes.some((h) => pointInRing(px, py, h))) continue;
+        const k = r * cols + c;
+        const h = pavement.surfaceAt(px, py) - SINK;
+        target[k] = weight[k] >= 1 ? Math.min(target[k], h) : h;
+        weight[k] = 1;
       }
     }
   }

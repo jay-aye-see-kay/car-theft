@@ -97,7 +97,10 @@ export function measureSides(tracks: Iterable<Track>, p: RoadParams): void {
         if (Math.abs(vx * t.tx[i] + vy * t.ty[i]) > 2.5) continue;
         const lateral = -vx * t.ty[i] + vy * t.tx[i];
         const along = Math.abs(t.tx[i] * o.t.tx[o.i] + t.ty[i] * o.t.ty[o.i]);
-        const theirs = halfWidth(o.t, o.i) / Math.max(0.5, along);
+        // A road that crosses or ends against this one only breaks the footpath where it meets it, and
+        // the shared pavement cuts that gap itself.
+        if (along < 0.5) continue;
+        const theirs = halfWidth(o.t, o.i) / along;
         // A narrower road lying wholly within this one takes nothing from its edges.
         if (Math.abs(lateral) + theirs <= half) continue;
         const gap = Math.abs(lateral) - half - theirs;

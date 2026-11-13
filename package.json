@@ -12,9 +12,11 @@
     "bake": "node tools/bake.ts"
   },
   "dependencies": {
+    "clipper-lib": "^6.4.2",
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@types/clipper-lib": "^6.4.0",
     "@types/node": "^26.6.5",
     "@types/three": "^0.186.0",
     "geotiff": "^3.0.5",

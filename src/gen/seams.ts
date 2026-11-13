@@ -100,7 +100,8 @@ const smoothstep = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 
  * from. This moves each to where its lanes really are: the leftmost against the left edge, the
  * rightmost against the right, easing back to the mapped line over a taper.
  */
-export function alignSeams(plans: Iterable<JunctionPlan>, p: RoadParams): void {
+export function alignSeams(plans: JunctionPlan[], p: RoadParams): void {
+  /** Each track's displacement, as x and y per sample. */
   const shifts = new Map<Track, Float32Array>();
   for (const plan of plans) {
     if (!plan.seam) continue;
@@ -125,20 +126,27 @@ export function alignSeams(plans: Iterable<JunctionPlan>, p: RoadParams): void {
         const major = t.cls === 'motorway' || t.cls === 'ramp';
         const taper = Math.min(Math.max(15, Math.abs(shift) * (major ? p.taperMotorway : p.taperStreet)), 120, t.length * 0.8);
         let by = shifts.get(t);
-        if (!by) shifts.set(t, (by = new Float32Array(t.n)));
+        if (!by) shifts.set(t, (by = new Float32Array(t.n * 2)));
+        // Square across the road it came from at the start, so every arm still starts on that road's end
+        // line; along its own normal by the end of the taper.
+        const [fx, fy] = [-uy * centre, ux * centre];
         for (let i = 0; i < t.n; i++) {
           const d = arm.end === 'a' ? t.s[i] : t.length - t.s[i];
-          by[i] += shift * (1 - smoothstep(d / taper));
+          const w = 1 - smoothstep(d / taper);
+          if (w <= 0) continue;
+          const [ox, oy] = [-t.ty[i] * shift, t.tx[i] * shift];
+          const v = Math.min(1, w * 1.5);
+          by[2 * i] += w * (fx * v + ox * (1 - v));
+          by[2 * i + 1] += w * (fy * v + oy * (1 - v));
         }
       });
     }
   }
+  taperSeams(plans, p);
   for (const [t, by] of shifts) {
     for (let i = 0; i < t.n; i++) {
-      // The old tangent is still in place here, so every sample moves along its own normal.
-      const [nx, ny] = [-t.ty[i], t.tx[i]];
-      t.x[i] += nx * by[i];
-      t.y[i] += ny * by[i];
+      t.x[i] += by[2 * i];
+      t.y[i] += by[2 * i + 1];
     }
     for (let i = 0; i < t.n; i++) {
       const a = Math.max(0, i - 1);
@@ -147,5 +155,46 @@ export function alignSeams(plans: Iterable<JunctionPlan>, p: RoadParams): void {
       t.tx[i] = (t.x[b] - t.x[a]) / d;
       t.ty[i] = (t.y[b] - t.y[a]) / d;
     }
+  }
+}
+
+/**
+ * Where one road simply carries on as another of a different width, the map changes the lane count
+ * at the node. Both ends ease to meet at the mean width over a taper centred on it, as a change of
+ * width within one road does.
+ */
+function taperSeams(plans: JunctionPlan[], p: RoadParams): void {
+  for (const plan of plans) {
+    const main = plan.arms.filter((a) => !a.minor);
+    if (!plan.seam || main.length !== 2) continue;
+    const ends = main.map((arm) => {
+      const i = arm.end === 'a' ? 0 : arm.t.n - 1;
+      // Forward and back as traffic heads out of the junction along this arm.
+      return arm.end === 'a' ? [arm.t.wF[i], arm.t.wB[i]] : [arm.t.wB[i], arm.t.wF[i]];
+    });
+    // Out along one arm is in along the other: its outward forward lanes meet the other's outward back ones.
+    const target = [(ends[0][0] + ends[1][1]) / 2, (ends[0][1] + ends[1][0]) / 2];
+    const goal = [target, [target[1], target[0]]];
+    main.forEach((arm, k) => {
+      const t = arm.t;
+      const [dOut, dBack] = [goal[k][0] - ends[k][0], goal[k][1] - ends[k][1]];
+      const change = Math.max(Math.abs(dOut), Math.abs(dBack)) * 2;
+      if (change < 0.05) return;
+      const major = t.cls === 'motorway' || t.cls === 'ramp';
+      const len = Math.min(Math.max(6, change * (major ? p.taperMotorway : p.taperStreet)), t.length);
+      for (let i = 0; i < t.n; i++) {
+        const d = arm.end === 'a' ? t.s[i] : t.length - t.s[i];
+        // Half the change at the node, none by half a taper out.
+        const w = 1 - smoothstep(d / len + 0.5);
+        if (w <= 0) continue;
+        if (arm.end === 'a') {
+          t.wF[i] += dOut * w * 2;
+          t.wB[i] += dBack * w * 2;
+        } else {
+          t.wB[i] += dOut * w * 2;
+          t.wF[i] += dBack * w * 2;
+        }
+      }
+    });
   }
 }

@@ -2,7 +2,10 @@
 import * as THREE from 'three';
 import type { JunctionShape, JunctionStatus, P3 } from './junctions.ts';
 import { RoadIndex } from './roadIndex.ts';
-import { DECK_DEPTH, type RoadParams, type Track, deckDepth, sampleAt } from './tracks.ts';
+import type { Network } from './network.ts';
+import type { PavePiece } from './pavement.ts';
+import { offset, stations } from './stations.ts';
+import { DECK_DEPTH, type RoadParams, type Track, sampleAt } from './tracks.ts';
 
 type RGB = [number, number, number];
 
@@ -47,13 +50,11 @@ class Builder {
     }
   }
 
-  polygon(ring: P3[], c: RGB): void {
+  polygon(ring: P3[], c: RGB, holes: P3[][] = []): void {
     const base = this.pos.length / 3;
-    for (const p of ring) this.vertex(p, c);
-    const faces = THREE.ShapeUtils.triangulateShape(
-      ring.map((p) => new THREE.Vector2(p.x, p.y)),
-      [],
-    );
+    for (const p of [ring, ...holes].flat()) this.vertex(p, c);
+    const v2 = (r: P3[]) => r.map((p) => new THREE.Vector2(p.x, p.y));
+    const faces = THREE.ShapeUtils.triangulateShape(v2(ring), holes.map(v2));
     for (const f of faces) this.idx.push(base + f[0], base + f[1], base + f[2]);
   }
 
@@ -67,57 +68,16 @@ class Builder {
   }
 }
 
-interface Station {
-  x: number;
-  y: number;
-  h: number;
-  /** Left-hand normal. */
-  nx: number;
-  ny: number;
-  wF: number;
-  wB: number;
-  level: number;
-  /** Room for a footpath or verge on the left and on the right. */
-  room: [number, number];
-  /** Depth of the deck here, if this is on a structure. */
-  deck: number;
-}
-
-function stations(t: Track): Station[] {
-  const from = t.cutA;
-  const to = t.length - t.cutB;
-  if (to - from < 0.2) return [];
-  const at = [from];
-  for (let i = 0; i < t.n; i++) if (t.s[i] > from + 0.5 && t.s[i] < to - 0.5) at.push(t.s[i]);
-  at.push(to);
-  return at.map((s) => {
-    const c = sampleAt(t, s);
-    const d = Math.hypot(c.tx, c.ty) || 1;
-    // A station counts as elevated only if both samples around it are, so decks end cleanly on the ground.
-    const level = t.level[c.i] !== 0 && t.level[c.i + 1] !== 0 ? t.level[c.i] : 0;
-    const u = Math.min(1, Math.max(0, (s - t.s[c.i]) / (t.s[c.i + 1] - t.s[c.i] || 1)));
-    const room = (side: 0 | 1): number => t.room[side][c.i] + (t.room[side][c.i + 1] - t.room[side][c.i]) * u;
-    const deck = Math.min(deckDepth(t, c.i), deckDepth(t, Math.min(t.n - 1, c.i + 1)));
-    return { x: c.x, y: c.y, h: c.h, nx: -c.ty / d, ny: c.tx / d, wF: c.wF, wB: c.wB, level, room: [room(0), room(1)], deck };
-  });
-}
-
-const offset = (st: Station, lateral: number, dh = 0): P3 => ({ x: st.x + st.nx * lateral, y: st.y + st.ny * lateral, h: st.h + dh });
-
 export interface RoadMeshOptions {
   /** Colour junctions by how well the generator coped, instead of as asphalt. */
   tintJunctions: boolean;
 }
 
-export function buildRoadMeshes(
-  tracks: Iterable<Track>,
-  junctions: JunctionShape[],
-  p: RoadParams,
-  opts: RoadMeshOptions,
-): { surface: THREE.BufferGeometry; markings: THREE.BufferGeometry } {
+export function buildRoadMeshes(net: Network, p: RoadParams, opts: RoadMeshOptions): { surface: THREE.BufferGeometry; markings: THREE.BufferGeometry } {
   const b = new Builder();
   const m = new Builder();
-  const all = [...tracks];
+  const all = [...net.tracks.values()];
+  const junctions: JunctionShape[] = net.junctions;
   const index = new RoadIndex(all);
   const C = ROAD_COLOURS;
   const white: RGB = [0.93, 0.93, 0.9];
@@ -142,19 +102,13 @@ export function buildRoadMeshes(
       // How wide the footpath can be here: all of it, or as far as the carriageway next door.
       const room = sts.map((st) => st.room[side > 0 ? 0 : 1]);
       const path = sts.map((_, i) => (t.road.footpath ? Math.min(p.footpathWidth, room[i]) : 0));
-      const paved = (i: number) => Math.max(path[i], path[i + 1]) > 0.3;
       // Nothing is built along an edge that lies against another road.
       const open = (i: number) => Math.max(room[i], room[i + 1]) > 0.05;
-      // A footpath that stops short is a median reaching the next road: it has no bank.
+      // On the ground, a road's footpath is part of the shared pavement; only a bare edge gets a bank here.
+      if (!t.road.footpath) b.ribbon(edge, sts.map((st, i) => offset(st, side * (half[i] + 1.0), -1.0)), C.bank, (i) => onGround(i) && open(i));
+      // On a structure the road carries its own kerb and footpath, and ends in a deck edge with a barrier.
+      const paved = (i: number) => elevated(i) && Math.max(path[i], path[i + 1]) > 0.3;
       const whole = (i: number) => !t.road.footpath || Math.min(path[i], path[i + 1]) > p.footpathWidth - 0.05;
-      // A gap too thin for a kerb is sealed over.
-      if (t.road.footpath)
-        b.ribbon(
-          edge,
-          sts.map((st, i) => offset(st, side * (half[i] + Math.min(room[i], 0.6)))),
-          C.asphalt,
-          (i) => open(i) && !paved(i),
-        );
       let outer = edge;
       let outerLift = 0;
       if (t.road.footpath) {
@@ -165,13 +119,6 @@ export function buildRoadMeshes(
         b.ribbon(kerbTop, outer, C.footpath, paved);
       }
       const reach = (i: number) => side * (half[i] + path[i]);
-      // On the ground the edge runs down into the graded terrain. On a bridge it becomes a deck edge with a barrier.
-      b.ribbon(
-        outer,
-        sts.map((st, i) => offset(st, reach(i) + side * 1.0, -1.0)),
-        C.bank,
-        (i) => onGround(i) && open(i) && whole(i),
-      );
       b.ribbon(
         outer,
         sts.map((st, i) => offset(st, reach(i), -st.deck)),
@@ -199,14 +146,18 @@ export function buildRoadMeshes(
   for (const j of junctions) {
     // Between motorway carriageways the join is motorway too, so a merge shows no patch.
     const fast = j.mouths.length > 0 && j.mouths.every((m) => m.track.cls === 'motorway' || m.track.cls === 'ramp');
-    b.polygon(j.ring, opts.tintJunctions ? STATUS_TINT[j.status] : fast ? C.motorway : C.junction);
-    if (j.deck) b.polygon(j.ring.map((pt) => ({ ...pt, h: pt.h - DECK_DEPTH })), C.structure);
+    const down = (r: P3[]) => r.map((pt) => ({ ...pt, h: pt.h - DECK_DEPTH }));
+    for (const piece of j.pieces) {
+      b.polygon(piece.outer, opts.tintJunctions ? STATUS_TINT[j.status] : fast ? C.motorway : C.junction, piece.holes);
+      if (j.deck) b.polygon(down(piece.outer), C.structure, piece.holes.map(down));
+    }
     for (const f of j.fillets) {
       if (f.deck && !f.footpath && f.pts.length >= 2) {
         b.ribbon(f.pts, f.pts.map((pt) => ({ ...pt, h: pt.h - DECK_DEPTH })), C.structure);
         b.ribbon(f.pts, f.pts.map((pt) => ({ ...pt, h: pt.h + 1.0 })), C.barrier);
       }
-      if (!f.footpath || f.pts.length < 2) continue;
+      // On the ground the corner's footpath is part of the shared pavement.
+      if (!f.footpath || !f.deck || f.pts.length < 2) continue;
       // Outward is to the right when walking the kerb anticlockwise around the junction.
       const out = f.pts.map((_, i) => {
         const a = f.pts[Math.max(0, i - 1)];
@@ -218,22 +169,51 @@ export function buildRoadMeshes(
       const far = f.pts.map((pt, i) => ({ x: pt.x + out[i].x * p.footpathWidth, y: pt.y + out[i].y * p.footpathWidth, h: pt.h + kh }));
       b.ribbon(f.pts, top, C.kerb);
       b.ribbon(top, far, C.footpath);
-      if (f.deck) {
-        b.ribbon(far, far.map((pt) => ({ ...pt, h: pt.h - kh - DECK_DEPTH })), C.structure);
-        b.ribbon(far, far.map((pt) => ({ ...pt, h: pt.h + 1.0 })), C.barrier);
-      } else {
-        b.ribbon(
-          far,
-          far.map((pt, i) => ({ x: pt.x + out[i].x, y: pt.y + out[i].y, h: pt.h - kh - 1 })),
-          C.bank,
-        );
-      }
+      b.ribbon(far, far.map((pt) => ({ ...pt, h: pt.h - kh - DECK_DEPTH })), C.structure);
+      b.ribbon(far, far.map((pt) => ({ ...pt, h: pt.h + 1.0 })), C.barrier);
     }
     // Only a real intersection stops anyone: three or more ways out.
     if (j.groups >= 3) for (const mouth of j.mouths) stopLine(m, mouth.track, mouth.end, white, LIFT);
   }
 
+  for (const piece of net.pavement.paved) pave(b, piece, kh);
+  for (const piece of net.pavement.sealed) b.polygon(piece.outer.pts, C.asphalt, piece.holes.map((h) => h.pts));
+
   return { surface: b.build(), markings: m.build() };
+}
+
+/** A piece of the shared pavement: its top a kerb above the road, a kerb face to each road it meets, a bank elsewhere. */
+function pave(b: Builder, piece: PavePiece, kh: number): void {
+  const C = ROAD_COLOURS;
+  const up = (r: P3[]) => r.map((q) => ({ ...q, h: q.h + kh }));
+  b.polygon(up(piece.outer.pts), C.footpath, piece.holes.map((h) => up(h.pts)));
+  for (const ring of [piece.outer, ...piece.holes]) {
+    const n = ring.pts.length;
+    const at = (k: number) => ring.pts[(k + n) % n];
+    // Outward is to the right: the paving lies to the left of its boundary.
+    const out = ring.pts.map((_, k) => {
+      const [a, c] = [at(k - 1), at(k + 1)];
+      const d = Math.hypot(c.x - a.x, c.y - a.y) || 1;
+      return { x: (c.y - a.y) / d, y: -(c.x - a.x) / d };
+    });
+    for (let k = 0; k < n; k++) {
+      const [a, c] = [at(k), at(k + 1)];
+      if (ring.edge[k] === 'seam') continue;
+      if (ring.edge[k] === 'kerb') {
+        b.ribbon([a, c], [{ ...a, h: a.h + kh }, { ...c, h: c.h + kh }], C.kerb);
+      } else {
+        const [oa, oc] = [out[k], out[(k + 1) % n]];
+        b.ribbon(
+          [{ ...a, h: a.h + kh }, { ...c, h: c.h + kh }],
+          [
+            { x: a.x + oa.x, y: a.y + oa.y, h: a.h - 1 },
+            { x: c.x + oc.x, y: c.y + oc.y, h: c.h - 1 },
+          ],
+          C.bank,
+        );
+      }
+    }
+  }
 }
 
 /** Lateral position of a point at distance `s`, `lateral` metres left of the centreline. */

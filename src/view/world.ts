@@ -161,9 +161,10 @@ export class World {
     for (let i = 0; i < land.data.length; i++) land.data[i] *= opts.hillScale;
     this.land = land;
 
-    const { tracks, junctions } = buildNetwork(model, land, DEFAULT_PARAMS);
-    const graded = gradeTerrain(land, tracks.values(), junctions, DEFAULT_PARAMS, model.paths);
-    const roads = buildRoadMeshes(tracks.values(), junctions, DEFAULT_PARAMS, { tintJunctions: false });
+    const net = buildNetwork(model, land, DEFAULT_PARAMS);
+    const { tracks, junctions } = net;
+    const graded = gradeTerrain(land, net, DEFAULT_PARAMS, model.paths);
+    const roads = buildRoadMeshes(net, DEFAULT_PARAMS, { tintJunctions: false });
     this.stamps = placeStamps(model, land);
     carveStamps(this.stamps, graded);
     this.surface = graded;
