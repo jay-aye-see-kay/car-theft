@@ -233,6 +233,8 @@ const CLEAR = 0.25;
 const TANGENT = 1.5;
 /** A median nose reaches this far up the arms past their cuts. */
 const NOSE = 6;
+/** Radii tried for rounding off a median's tip, largest first. */
+const TIPS = [1.2, 0.9];
 /** Inlets in a junction's outline narrower than twice this are paved over as islands. */
 const NOTCH = 3.5;
 
@@ -324,13 +326,37 @@ function solveCuts(arms: Arm[], node: Junction, p: RoadParams): Body {
     whole = whole.union(upTo.close(p.kerbRadius));
   }
   const islands: XY[][] = [];
+  let given = new Region([]);
   for (const [i, k] of together) {
     const [a, b] = [arms[i], arms[k]];
     const short = Region.of([strip(a, -back[i], Math.min(reach[i], a.cut + NOSE)), strip(b, -back[k], Math.min(reach[k], b.cut + NOSE))]).union();
     // Every arm's stub is in `whole`, so the nose never reaches over a carriageway.
     const nose = short.close(p.kerbRadius).minus(whole).open(0.5, true);
-    for (const sh of nose.shapes(4)) islands.push(sh.outer);
+    // The far end of the nose, where it runs on into the median beside the road.
+    const [ea, eb] = [Math.min(reach[i], a.cut + NOSE), Math.min(reach[k], b.cut + NOSE)];
+    const ends = Region.of([strip(a, ea - 2, ea + 1), strip(b, eb - 2, eb + 1)]).union().close(p.kerbRadius);
+    for (const sh of nose.shapes(4)) {
+      // The corners of the tip are rounded off, and the roadway fills what that leaves.
+      const square = Region.of([sh.outer]);
+      // A radius is taken only if all it rounds off is at the tip, where the median meets the roadway:
+      // too big a radius would also pinch in a median that narrows further on.
+      const area = (r: Region): number => r.shapes().reduce((n, t) => n + Math.abs(t.outer.reduce((m, q, i) => m + q.x * t.outer[(i + 1) % t.outer.length].y - t.outer[(i + 1) % t.outer.length].x * q.y, 0) / 2), 0);
+      let round = square;
+      for (const d of TIPS) {
+        const tip = Region.of([strip(a, -back[i], a.cut + d * 1.3 + 0.3), strip(b, -back[k], b.cut + d * 1.3 + 0.3)]).union().close(p.kerbRadius);
+        // Only the tip: the far end is left as it is.
+        const r = square.open(d, true).union(square.minus(tip)).union(ends).within(square);
+        if (square.minus(r).minus(tip).shapes(0.05).length === 0 && r.shapes(4).length === 1 && area(r) > area(square) * 0.9) {
+          round = r;
+          break;
+        }
+      }
+      for (const t of round.shapes(4)) islands.push(t.outer);
+      given = given.union(square.minus(round));
+    }
   }
+  // Only once every nose is made, so what one gives back cannot cut into another.
+  whole = whole.union(given.minus(Region.of(islands)));
   return { whole, reach, islands, squeezed, merge };
 }
 
