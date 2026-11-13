@@ -10,6 +10,16 @@ import { type RoadParams, type Track, deckDepth, halfWidth } from './tracks.ts';
 /** How far the ground sits below a road surface, so it can never show through. */
 const SINK = 0.15;
 
+/**
+ * Further in from a road's edge the ground drops away under it, by this much per metre and up to
+ * `DEEP`. A road's surface is flat facets between its own edges, and on a slope those can dip below
+ * any estimate of its height made from nearby: only at the edge does the ground need to be close.
+ */
+const DEEPEN = 0.5;
+const DEEP = 1;
+/** Starts more than one square of the ground's grid in from the edge, so no slope down reaches the edge. */
+const deepen = (inside: number): number => Math.min(DEEP, Math.max(0, inside - 3) * DEEPEN);
+
 /** Standing room under a deck. */
 const UNDER_DECK = 2.6;
 /** Rise per metre of the ramps a cut-through makes down to its floor. */
@@ -163,7 +173,7 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
             sumWH[k] += near * h;
             // Two road beds overlap (the halves of a divided road on a cross slope): the lower one
             // wins, so the ground can never stand above either surface.
-            if (d <= hw + SHELF) under[k] = Math.min(under[k], h);
+            if (d <= hw + SHELF) under[k] = Math.min(under[k], h - deepen(hw - d));
           }
         }
       }
@@ -172,7 +182,9 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
 
   for (let k = 0; k < weight.length; k++) if (sumW[k] > 0) target[k] = under[k] < Infinity ? under[k] : sumWH[k] / sumW[k];
 
-  // Junction interiors: flat to the junction's own surface.
+  // Junction interiors: just under the junction's own surface, which is flat triangles between the
+  // points of its outline. The same triangles are found here, so the ground follows them exactly:
+  // on a slope they can dip well below any smooth estimate from the outline's heights.
   for (const j of junctions) for (const piece of j.pieces) {
     const ring: Pt[] = piece.outer.map((q) => [q.x, q.y]);
     let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
@@ -182,6 +194,21 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
       maxX = Math.max(maxX, x);
       maxY = Math.max(maxY, y);
     }
+    const v2 = (pts: { x: number; y: number }[]) => pts.map((q) => new THREE.Vector2(q.x, q.y));
+    const verts = [piece.outer, ...piece.holes].flat();
+    const faces = THREE.ShapeUtils.triangulateShape(v2(piece.outer), piece.holes.map(v2));
+    const onFace = (px: number, py: number): number | undefined => {
+      for (const [ia, ib, ic] of faces) {
+        const [a, b, c] = [verts[ia], verts[ib], verts[ic]];
+        const det = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if (Math.abs(det) < 1e-9) continue;
+        const u = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / det;
+        const v = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / det;
+        if (u < -1e-6 || v < -1e-6 || u + v > 1 + 1e-6) continue;
+        return u * a.h + v * b.h + (1 - u - v) * c.h;
+      }
+      return undefined;
+    };
     for (let r = Math.max(0, Math.ceil((minY - y0) / cell)); r <= Math.min(rows - 1, Math.floor((maxY - y0) / cell)); r++) {
       for (let c = Math.max(0, Math.ceil((minX - x0) / cell)); c <= Math.min(cols - 1, Math.floor((maxX - x0) / cell)); c++) {
         const px = x0 + c * cell;
@@ -189,20 +216,25 @@ export function gradeTerrain(ground: Heightfield, net: Network, p: RoadParams, p
         if (!pointInRing(px, py, ring)) continue;
         let sum = 0;
         let wsum = 0;
-        for (const q of piece.outer) {
+        let inside = Infinity;
+        piece.outer.forEach((q, i) => {
           const w = 1 / ((q.x - px) ** 2 + (q.y - py) ** 2 + 0.01);
           sum += q.h * w;
           wsum += w;
-        }
+          const b = piece.outer[(i + 1) % piece.outer.length];
+          const len2 = (b.x - q.x) ** 2 + (b.y - q.y) ** 2 || 1;
+          const u = Math.min(1, Math.max(0, ((px - q.x) * (b.x - q.x) + (py - q.y) * (b.y - q.y)) / len2));
+          inside = Math.min(inside, Math.hypot(px - (q.x + (b.x - q.x) * u), py - (q.y + (b.y - q.y) * u)));
+        });
         const k = r * cols + c;
-        const h = sum / wsum - SINK;
+        const h = (onFace(px, py) ?? sum / wsum) - SINK;
         if (weight[k] > 0 && target[k] < h - 1.5) {
           // Another road's bed runs underneath: this part of the junction is on a structure.
           ceiling[k] = Math.min(ceiling[k], h - 0.6);
         } else if (!j.deck || Math.abs(h - out.data[k]) < 4 || weight[k] > 0) {
           // Only where the ground is on this junction's level; a junction on a viaduct has open air under it.
           // Where a road bed is already here, the lower surface wins, as it does between two roads.
-          target[k] = weight[k] >= 1 ? Math.min(target[k], h) : h;
+          target[k] = (weight[k] >= 1 ? Math.min(target[k], h) : h) - deepen(inside);
           weight[k] = 1;
         }
       }
